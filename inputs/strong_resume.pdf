@@ -1,0 +1,89 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+
+4 0 obj
+<< /Length 2655 >>
+stream
+BT
+/F1 9 Tf
+50 750 Td
+12 TL
+(ALEX TAN MING WEI) Tj T*
+(alex.tan@email.com | +65 9123 4567 | linkedin.com/in/alextan | github.com/alextan) Tj T*
+() Tj T*
+(SUMMARY) Tj T*
+(Systems-oriented RTIS graduate with hands-on experience building real-time) Tj T*
+(simulation systems, REST APIs, and containerised infrastructure tools.) Tj T*
+() Tj T*
+(PROJECTS) Tj T*
+(Distributed Task Scheduler \(Aug 2025 ? Dec 2025\)) Tj T*
+(- Designed a Python-based distributed task scheduler using Redis and Docker) Tj T*
+(  that reduced job processing time by 40%, handling 500+ concurrent tasks.) Tj T*
+(- Implemented RESTful APIs with FastAPI and deployed on AWS ECS using) Tj T*
+(  Terraform, achieving 99.9% uptime over a 3-month period.) Tj T*
+(- Automated CI/CD pipeline with GitHub Actions, cutting deployment time from) Tj T*
+(  30 minutes to under 5 minutes.) Tj T*
+() Tj T*
+(Real-Time Physics Engine \(Jan 2025 ? May 2025\)) Tj T*
+(- Built a real-time application loop in C++ with Vulkan rendering that) Tj T*
+(  sustained 60 fps on 500+ dynamic objects simultaneously.) Tj T*
+(- Implemented spatial algorithms \(AABB broad-phase, SAT narrow-phase\) in C++,) Tj T*
+(  reducing collision computation time by 35%.) Tj T*
+(- Deployed cross-platform on Windows and Linux using CMake.) Tj T*
+() Tj T*
+(Linux Monitoring Dashboard \(Mar 2024 ? Jun 2024\)) Tj T*
+(- Developed a Prometheus + Grafana monitoring stack with Bash automation scripts) Tj T*
+(  that detected system anomalies 3x faster than manual log review.) Tj T*
+(- Containerised the stack with Docker Compose; integrated Kubernetes Helm charts) Tj T*
+(  for scaling across 10-node clusters.) Tj T*
+() Tj T*
+(EXPERIENCE) Tj T*
+(Systems Engineering Intern, Accenture Singapore \(May 2025 ? Aug 2025\)) Tj T*
+(- Automated infrastructure provisioning with Terraform and Ansible across) Tj T*
+(  AWS GCP environments, reducing manual setup time by 60%.) Tj T*
+(- Wrote Python scripts to parse and validate Kubernetes pod logs, enabling) Tj T*
+(  the team to resolve incidents 50% faster.) Tj T*
+() Tj T*
+(EDUCATION) Tj T*
+(DigiPen Institute of Technology Singapore) Tj T*
+(Bachelor of Science in Real-Time Interactive Simulation \(RTIS\), May 2026) Tj T*
+(Relevant courses: Operating Systems, Computer Networks, Distributed Systems,) Tj T*
+(Computer Graphics, Algorithms & Data Structures) Tj T*
+() Tj T*
+(SKILLS) Tj T*
+(Languages: Python, C++, Go, Bash) Tj T*
+(Frameworks: FastAPI, Pytest, gRPC) Tj T*
+(Tools: Docker, Kubernetes, Terraform, Ansible, Prometheus, Grafana, GitHub Actions) Tj T*
+(Concepts: REST API, microservices, CI/CD, distributed systems, TCP/IP, DNS) Tj T*
+(Platforms: AWS, GCP, Linux) Tj T*
+ET
+endstream
+endobj
+
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000059 00000 n 
+0000000117 00000 n 
+0000000244 00000 n 
+0000002952 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+3023
+%%EOF

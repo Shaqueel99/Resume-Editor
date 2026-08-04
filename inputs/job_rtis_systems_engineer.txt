@@ -1,0 +1,45 @@
+Systems Engineer — Infrastructure & Platform
+Phillip Securities Pte Ltd | Singapore (Hybrid) | Entry to Mid Level
+
+About the Role
+We are looking for a driven Systems Engineer to join our Infrastructure and Platform team.
+You will be responsible for building, maintaining, and scaling internal tools and services
+that power our trading platform and back-office operations. This role is a great fit for
+recent graduates from computer science or engineering programmes who are eager to work
+with real production systems.
+
+Responsibilities
+- Design and implement RESTful APIs and microservices using Python and Go.
+- Automate infrastructure provisioning with Terraform and Ansible.
+- Monitor system health using Prometheus, Grafana, and ELK stack.
+- Participate in on-call rotation and incident response.
+- Write technical documentation and runbooks.
+- Collaborate with software engineers, data engineers, and QA teams.
+
+Required Skills and Experience
+- Proficiency in at least one systems programming language: Python, Go, or C++.
+- Experience with Linux operating systems and shell scripting (Bash).
+- Familiarity with Docker and Kubernetes for containerised workloads.
+- Understanding of networking fundamentals: TCP/IP, DNS, load balancing.
+- Experience with at least one cloud platform: AWS, GCP, or Azure.
+- Strong problem-solving skills and attention to detail.
+- Good written and verbal communication in English.
+
+Preferred Skills
+- Experience with CI/CD pipelines (GitHub Actions, Jenkins, or equivalent).
+- Familiarity with Infrastructure as Code (Terraform, Pulumi).
+- Knowledge of distributed systems and consensus algorithms.
+- Exposure to financial systems or trading platforms.
+- Experience with observability tools (Prometheus, Grafana).
+
+About Phillip Securities
+Phillip Securities is one of Singapore's leading financial services firms,
+providing brokerage, wealth management, and advisory services to retail and
+institutional clients across Asia.
+
+We value continuous learning, technical rigour, and a growth mindset.
+Fresh graduates with strong fundamentals and a passion for systems work
+are encouraged to apply.
+
+Location: Raffles Place, Singapore (Hybrid — 3 days in office)
+Salary: SGD 3,500 – SGD 5,000/month (commensurate with experience)
