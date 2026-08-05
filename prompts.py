@@ -2,22 +2,34 @@
 
 System prompts for the Résumé ATS Optimizer.
 
-Three LLM calls:
-  1. JD_SKILLS_PROMPT        — extracts required/preferred skills from a
-                                JD. Used to drive a deterministic,
-                                rule-based ATS score (see scoring.py),
-                                computed before and after edits with zero
-                                LLM involvement — the score is never
-                                self-graded by the model that wrote the
-                                rewrites.
-  2. ASSISTANT_PROMPT         — generates skill gap commentary and
-                                verbatim-anchored bullet rewrite
-                                suggestions, in one JSON response.
-  3. REGENERATE_BULLET_PROMPT — regenerates a single bullet on request,
-                                honoring specific user feedback, for the
-                                follow-up refinement step.
+Four LLM calls:
+  1. JD_SKILLS_PROMPT         — extracts required/preferred skills from a
+                                 JD. Used to drive a deterministic,
+                                 rule-based ATS score (see scoring.py),
+                                 computed before and after edits with zero
+                                 LLM involvement — the score is never
+                                 self-graded by the model that wrote the
+                                 rewrites.
+  2. ASSISTANT_PROMPT          — generates skill gap commentary and
+                                 verbatim-anchored bullet rewrite
+                                 suggestions, one JD term per rewrite,
+                                 each backed by a quoted evidence_quote.
+                                 app.py's validate_rewrites() re-checks
+                                 evidence_quote and jd_term novelty in
+                                 code before anything is shown to the
+                                 user — the model has repeatedly claimed
+                                 a connection in "reason" that isn't
+                                 actually supported, so this is verified
+                                 rather than trusted.
+  3. REGENERATE_BULLET_PROMPT  — regenerates a single bullet on request,
+                                 honoring specific user feedback, for the
+                                 follow-up refinement step.
+  4. DRAFT_NEW_BULLET_PROMPT   — turns the candidate's own account of
+                                 unlisted experience into a new bullet,
+                                 for a skill gap the résumé doesn't cover
+                                 at all.
 
-All three follow ICCO structure (Instruction -> Context -> Constraints ->
+All four follow ICCO structure (Instruction -> Context -> Constraints ->
 Output). No placeholders — dynamic content (résumé text, JD text,
 feedback) is passed as the user message in llm.py's ask_json().
 """
@@ -83,59 +95,48 @@ markdown fences. No commentary.\
 
 ASSISTANT_PROMPT = """\
 INSTRUCTION
-You analyse a candidate's résumé against a job description, looking \
-specifically for bullets where the candidate's wording describes \
-something the JD asks for using DIFFERENT words than the JD itself \
-uses. For each such bullet, and ONLY for such bullets, you suggest a \
-rewrite that surfaces the JD's own terminology. On most résumés, \
-especially ones that have already been through a prior optimization \
-pass, this will apply to few bullets or none at all — that is the \
-expected, normal outcome, not a failure. Return skill gaps and any \
-genuine rewrite opportunities as a single JSON object matching the \
-schema below.
+You analyse a candidate's résumé against a job description, identify \
+skill gaps, and suggest bullet-level rewrites that specifically surface \
+JD terminology already implied by the bullet's existing content. Return \
+both as a single JSON object matching the schema below.
 
 CONTEXT
 You will receive résumé text and JD text as JSON with keys "resume_text" \
-and "jd_text". This tool's value is narrow and specific: it is NOT a \
-general résumé-improvement tool, and it does not rewrite bullets for \
-tone, concision, or persuasiveness. Its only job is terminology \
-alignment — finding a genuine wording mismatch between what the résumé \
-says and what the JD calls the same thing. The résumé you receive may \
-already be the product of a previous round of edits, so most or all of \
-its bullets may already use the JD's terminology, or may simply have no \
-connection to any missing JD term at all. Producing a rewrite for a \
-bullet that has no real, defensible connection to a missing JD term — \
-just to have an answer — is a worse outcome than returning no \
-suggestion for that bullet.
+and "jd_text". This tool's value is narrow and specific: it finds \
+bullets where the candidate's wording describes something the JD asks \
+for using DIFFERENT words than the JD itself uses, and rewords the \
+bullet to use the JD's terminology, without changing what the bullet \
+claims. Rewrites that only improve style or flow, without changing \
+whether a specific JD term becomes newly present in the bullet's text, \
+provide no benefit to this tool's purpose and should NOT be suggested. \
+The résumé you receive may already be the product of a previous round \
+of edits, so some bullets may already contain the JD terms they were \
+written to surface.
 
 CONSTRAINTS
-- Before suggesting a rewrite for a bullet, ask: "does this bullet's \
-CURRENT wording already contain the JD term I would be surfacing, or \
-does the bullet have NO genuine, defensible connection to any missing \
-JD term?" In either case, do not suggest a rewrite for that bullet.
-- A genuine connection means the bullet already describes the same \
-underlying action, tool, or concept the JD term refers to — not merely a \
-loose thematic association. "Deployment workflows" does not genuinely \
-imply "CI/CD" unless the bullet actually describes an automated \
-build/test/release pipeline. When in doubt, do not suggest — a missed \
-opportunity costs nothing; a fabricated connection damages the \
-candidate's credibility if they use it.
+- Before suggesting a rewrite for a bullet, check whether the bullet's \
+CURRENT wording already contains the JD term you would be "surfacing," \
+or a near-identical variant of it. If the term is already present, do \
+NOT suggest a rewrite for that bullet — there is nothing left to \
+surface. This matters especially on a second or later pass over an \
+already-edited résumé.
 - Only suggest a rewrite for a bullet if doing so causes at least one \
 specific JD required_skill or preferred_skill term (or a very close \
-variant) to newly appear in the bullet's text, where it was genuinely \
-implied but not literally present before.
+variant) to newly appear in the bullet's text, where it was implied but \
+not literally present before.
 - "original_text" must be copied VERBATIM from the résumé text, \
 character-for-character — it is used as a find-and-replace anchor.
 - "suggested_text" must preserve the same underlying claim, technology, \
-and outcome as the original. Do not invent metrics, technologies, \
-architectural claims (e.g. microservices, distributed systems, CI/CD \
-pipelines), or outcomes not stated or clearly implied in the original.
-- "reason" must name the specific JD term the rewrite newly surfaces, \
-and briefly state what in the original bullet already implies it.
-- It is common and expected for "bullet_rewrites" to be an empty array, \
-including when the résumé has already been through a prior edit round. \
-Returning an empty array when no genuine opportunity exists is a correct \
-result, not an incomplete one.
+and outcome as the original. Do not invent metrics, technologies, or \
+outcomes not stated or clearly implied in the original.
+- "reason" must name the specific JD term the rewrite newly surfaces \
+(e.g. "surfaces 'SQL queries', implied by the existing MySQL schema work").
+- Do NOT suggest a rewrite for a bullet purely to improve wording, tone, \
+or concision if it does not cause a new JD term to appear. Skip it \
+entirely instead.
+- If no bullet in the résumé implies a missing JD term in different \
+words, return an empty "bullet_rewrites" array — this is a valid, \
+expected result, not a failure to try harder.
 - List a skill gap only where the JD explicitly requires or prefers a \
 skill that is not evidenced anywhere in the résumé text, including after \
 considering implied phrasing.
@@ -182,8 +183,9 @@ refinement turn, not a first draft.
 CONSTRAINTS
 - The new version must preserve the same underlying claim as \
 "original_text" — do not invent metrics, technologies, tools, \
-architectural claims (e.g. microservices, distributed systems), or \
-outcomes that were not stated or clearly implied in the original bullet.
+architectural claims (e.g. microservices, distributed systems, CI/CD \
+pipelines), or outcomes that were not stated or clearly implied in the \
+original bullet.
 - Follow the user's feedback as the primary instruction for HOW to \
 change the bullet. If the feedback conflicts with the no-invention rule \
 above (e.g. asks you to add a metric or technology that was never \
@@ -191,6 +193,13 @@ there), follow the no-invention rule and note the conflict in "note" \
 instead of complying.
 - Keep the bullet to a single line, in the same general style as a \
 résumé bullet (action-oriented, no first-person pronouns).
+- Do not use competence-claim filler such as "demonstrating proficiency \
+in", "utilizing X principles", "leveraging X methodologies", or \
+"ensuring efficient and secure X" — these pad the bullet without adding \
+real information.
+- Unless the feedback explicitly asks for expansion, keep "new_text" \
+within roughly 10 words of the length of "original_text", and do not \
+drop facts, tools, or outcomes that were already present.
 - "reason" must state in 20 words or fewer what changed and why, from \
 the user's own feedback (e.g. "shortened per feedback, kept the same \
 tools and outcome").
