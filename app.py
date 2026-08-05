@@ -151,17 +151,26 @@ def safe_call(label, fn, *args, **kwargs):
         st.stop()
 
 
-def run_assistant_analysis(resume_text: str, jd_text: str, label: str) -> dict:
+def run_assistant_analysis(resume_text: str, jd_text: str, label: str, on_step=None) -> dict:
     """Run SKILL_GAPS_PROMPT and BULLET_REWRITES_PROMPT (two separate,
     focused LLM calls — see prompts.py's module docstring for why this
     replaced one combined ASSISTANT_PROMPT call) and merge their results
     into the {"skill_gaps": [...], "bullet_rewrites": [...]} shape the
-    rest of the app expects, with duplicates dropped from each list."""
+    rest of the app expects, with duplicates dropped from each list.
+
+    If given, on_step() is called right before each of the two LLM
+    calls, so a caller driving a shared progress overlay (see
+    start_progress_overlay()) can advance it between them."""
     user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
 
+    if on_step:
+        on_step("skill_gaps")
     skill_gaps_result = safe_call(
         f"{label} (skill gaps)", ask_json, SKILL_GAPS_PROMPT, user_msg
     )
+
+    if on_step:
+        on_step("bullet_rewrites")
     bullet_rewrites_result = safe_call(
         f"{label} (bullet rewrites)", ask_json, BULLET_REWRITES_PROMPT, user_msg
     )
@@ -211,17 +220,17 @@ def reset_suggestion_state():
                                 "has_exp_", "exp_input_", "target_"))]:
         del st.session_state[k]
 
-def show_overlay(message: str):
-    """Full-page dimmed overlay with a centered message. Call before a
-    long-running block, keep the returned placeholder open until the
-    block finishes, then call .empty() on it."""
+def render_overlay(placeholder, message: str, progress: int) -> None:
+    """(Re)render a full-page dimmed overlay with a spinner, a message,
+    and a progress bar into an EXISTING st.empty() placeholder — call
+    once per step of a multi-step operation so the same overlay updates
+    in place instead of flashing a new box per step. progress is 0-100."""
     theme_base = st.get_option("theme.base") or "light"
     if theme_base == "dark":
-        bg, text = "#1e1e1e", "#f0f0f0"
+        bg, text, track = "#1e1e1e", "#f0f0f0", "#3a3a3a"
     else:
-        bg, text = "#ffffff", "#111111"
+        bg, text, track = "#ffffff", "#111111", "#e2e5e9"
 
-    placeholder = st.empty()
     placeholder.markdown(
         f"""
         <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -229,11 +238,18 @@ def show_overlay(message: str):
                     display: flex; align-items: center; justify-content: center;">
             <div style="background: {bg}; color: {text};
                         padding: 24px 32px; border-radius: 12px; font-size: 15px;
-                        display: flex; align-items: center; gap: 12px;">
-                <div style="width: 18px; height: 18px; border: 2px solid {text};
-                            border-top-color: transparent; border-radius: 50%;
-                            animation: spin 0.8s linear infinite;"></div>
-                {message}
+                        min-width: 320px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
+                    <div style="width: 18px; height: 18px; border: 2px solid {text};
+                                border-top-color: transparent; border-radius: 50%;
+                                animation: spin 0.8s linear infinite; flex-shrink: 0;"></div>
+                    <div>{message}</div>
+                </div>
+                <div style="width: 100%; height: 6px; background: {track};
+                            border-radius: 3px; overflow: hidden;">
+                    <div style="width: {progress}%; height: 100%; background: #ff4b4b;
+                                border-radius: 3px; transition: width 0.3s ease;"></div>
+                </div>
             </div>
         </div>
         <style>
@@ -242,7 +258,22 @@ def show_overlay(message: str):
         """,
         unsafe_allow_html=True,
     )
-    return placeholder
+
+
+def start_progress_overlay(steps: list[str]):
+    """Show a full-page dimmed overlay that steps through `steps`, one at
+    a time, with a proportional progress bar. Returns (placeholder,
+    advance) — call advance(i) right before starting step i (0-indexed);
+    the bar reflects i / len(steps) steps already completed. Call
+    placeholder.empty() once the whole operation finishes."""
+    placeholder = st.empty()
+    total = len(steps)
+
+    def advance(i: int) -> None:
+        render_overlay(placeholder, steps[i], int(i / total * 100))
+
+    advance(0)
+    return placeholder, advance
 
 
 MAMMOTH_STYLE_MAP = """
@@ -329,7 +360,12 @@ if run:
         st.error("Upload a résumé and paste a job description first.")
         st.stop()
 
-    overlay = show_overlay("Checking your fit against this role…")
+    overlay, advance = start_progress_overlay([
+        "Extracting required skills from the job description…",
+        "Scoring your résumé against the role…",
+        "Finding skill gaps…",
+        "Finding bullet rewrite opportunities…",
+    ])
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
         tmp.write(resume_file.getvalue())
@@ -339,12 +375,14 @@ if run:
     jd_skills = safe_call("JD skill extraction", ask_json, JD_SKILLS_PROMPT, jd_text)
     st.session_state.jd_skills = jd_skills
 
+    advance(1)
     st.session_state.before_score = compute_ats_score(
         resume_text, jd_skills["required_skills"], jd_skills["preferred_skills"],
     )
 
     st.session_state.assistant_output = run_assistant_analysis(
-        resume_text, jd_text, "Résumé analysis"
+        resume_text, jd_text, "Résumé analysis",
+        on_step=lambda which: advance(2 if which == "skill_gaps" else 3),
     )
 
     reset_suggestion_state()
@@ -537,7 +575,12 @@ if st.session_state.assistant_output:
 
     with apply_col:
         if st.button("Apply changes and rescore", type="primary", use_container_width=True):
-            overlay = show_overlay("Applying changes and rescoring…")
+            overlay, advance = start_progress_overlay([
+                "Applying your changes to the résumé…",
+                "Rescoring your résumé…",
+                "Finding skill gaps…",
+                "Finding bullet rewrite opportunities…",
+            ])
 
             replacements = collect_replacements()
 
@@ -573,6 +616,7 @@ if st.session_state.assistant_output:
             st.session_state.edited_path = out_path
             edited_text = extract_docx_text(out_path)
 
+            advance(1)
             st.session_state.after_score = compute_ats_score(
                 edited_text,
                 st.session_state.jd_skills["required_skills"],
@@ -580,7 +624,8 @@ if st.session_state.assistant_output:
             )
 
             st.session_state.assistant_output = run_assistant_analysis(
-                edited_text, jd_text, "Résumé re-analysis"
+                edited_text, jd_text, "Résumé re-analysis",
+                on_step=lambda which: advance(2 if which == "skill_gaps" else 3),
             )
 
             st.session_state.resume_path = out_path
