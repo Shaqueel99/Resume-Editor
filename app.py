@@ -203,6 +203,9 @@ def reset_suggestion_state():
     st.session_state.current_reasons = {}
     st.session_state.drafted_gaps = set()
     st.session_state.pending_drafts = {}
+    st.session_state.skill_gap_has_exp = {}
+    st.session_state.skill_gap_exp_input = {}
+    st.session_state.skill_gap_target = {}
     for k in [k for k in st.session_state.keys()
               if k.startswith(("choice_", "manual_", "feedback_", "regen_",
                                 "has_exp_", "exp_input_", "target_"))]:
@@ -295,6 +298,9 @@ for key, default in [
     ("current_reasons", {}),
     ("drafted_gaps", set()),
     ("pending_drafts", {}),
+    ("skill_gap_has_exp", {}),
+    ("skill_gap_exp_input", {}),
+    ("skill_gap_target", {}),
     ("edited_path", None),
     ("after_score", None),
     ("pending_scroll", False),
@@ -454,28 +460,54 @@ if st.session_state.assistant_output:
                 st.write(f"**{gap['skill']}**")
                 st.caption(gap["why_it_matters"])
 
+                has_exp_key = f"has_exp_{gap['skill']}"
+                if has_exp_key not in st.session_state:
+                    # Streamlit drops a widget's session_state entry if it
+                    # isn't re-registered by the time a run ends — which
+                    # happens whenever st.rerun() fires from EARLIER in the
+                    # script (e.g. "Regenerate" in Bullet suggestions,
+                    # above this section) before this widget is reached.
+                    # Re-seed from our own backup dict, which we keep in
+                    # sync below and isn't subject to that widget lifecycle.
+                    st.session_state[has_exp_key] = st.session_state.skill_gap_has_exp.get(
+                        gap["skill"], "No"
+                    )
                 has_exp = st.radio(
                     "Do you have relevant experience?",
                     ["No", "Yes"],
-                    key=f"has_exp_{gap['skill']}",
+                    key=has_exp_key,
                     horizontal=True,
                     label_visibility="collapsed",
                 )
+                st.session_state.skill_gap_has_exp[gap["skill"]] = has_exp
+
                 if has_exp == "Yes":
                     input_key = f"exp_input_{gap['skill']}"
                     if gap["skill"] in st.session_state.pending_drafts:
                         st.session_state[input_key] = st.session_state.pending_drafts.pop(gap["skill"])
+                    elif input_key not in st.session_state:
+                        st.session_state[input_key] = st.session_state.skill_gap_exp_input.get(
+                            gap["skill"], ""
+                        )
                     candidate_input = st.text_area(
                         "Briefly describe it",
                         key=input_key,
                         label_visibility="collapsed",
                         placeholder=f"What did you do with {gap['skill']}?",
                     )
-                    st.selectbox(
+                    st.session_state.skill_gap_exp_input[gap["skill"]] = candidate_input
+
+                    target_key = f"target_{gap['skill']}"
+                    if target_key not in st.session_state:
+                        saved_target = st.session_state.skill_gap_target.get(gap["skill"])
+                        if saved_target in gap_target_choices:
+                            st.session_state[target_key] = saved_target
+                    selected_target = st.selectbox(
                         "Add this bullet to",
                         gap_target_choices,
-                        key=f"target_{gap['skill']}",
+                        key=target_key,
                     )
+                    st.session_state.skill_gap_target[gap["skill"]] = selected_target
                     if st.button("Draft a bullet", key=f"draft_{gap['skill']}"):
                         if candidate_input.strip():
                             with st.spinner("Drafting..."):
@@ -515,10 +547,10 @@ if st.session_state.assistant_output:
             new_section_bullets = []
             entry_bullets: dict[int, list[str]] = {}
             for skill in st.session_state.drafted_gaps:
-                text = st.session_state.get(f"exp_input_{skill}", "").strip()
+                text = st.session_state.skill_gap_exp_input.get(skill, "").strip()
                 if not text:
                     continue
-                choice = st.session_state.get(f"target_{skill}", NEW_SECTION_OPTION)
+                choice = st.session_state.skill_gap_target.get(skill, NEW_SECTION_OPTION)
                 try:
                     choice_idx = target_choices.index(choice)
                 except ValueError:
