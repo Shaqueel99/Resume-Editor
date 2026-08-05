@@ -10,7 +10,7 @@ whether those rewrites "worked." The before/after score comparison is
 only meaningful if scoring is independent of generation.
 
 Matching is done on normalized text (see _normalize) rather than raw
-substrings, so minor wording variants like "React" vs "React.js" still
+substrings, so minor wording variants like "React.js" vs "React" still
 match — without needing an LLM judgment call in the scoring path itself.
 """
 
@@ -18,20 +18,17 @@ import re
 
 
 def _normalize(text: str) -> str:
-    """Lowercase and strip punctuation/common suffixes so minor wording
-    variants compare equal (e.g. "React.js" and "React" both become
-    "reactjs" / "react" after suffix + punctuation stripping).
-
-    This is intentionally simple — it fixes common cosmetic mismatches
-    (periods, hyphens, ".js" suffixes) without attempting full synonym
-    matching (e.g. "JS" vs "JavaScript"), which would require language
-    understanding and therefore an LLM call, defeating the point of
-    keeping this function deterministic.
+    """Lowercase, turn punctuation into spaces, strip standalone "js"
+    tokens, and strip trailing version digits from words (e.g. "html5"
+    -> "html", "css3" -> "css") — so "HTML5"/"HTML" and "CSS3"/"CSS"
+    both normalize to the same token, alongside the existing
+    "React.js"/"React" handling.
     """
     s = text.lower().strip()
-    s = re.sub(r'\.js\b', 'js', s)     # "react.js" -> "reactjs"
-    s = re.sub(r'[^\w\s]', '', s)       # strip remaining punctuation
-    s = re.sub(r'\s+', ' ', s).strip()  # collapse extra whitespace
+    s = re.sub(r'[^\w\s]', ' ', s)        # punctuation -> space
+    s = re.sub(r'\bjs\b', '', s)           # strip standalone "js" token
+    s = re.sub(r'([a-z]+)\d+\b', r'\1', s)  # "html5" -> "html", "css3" -> "css"
+    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
