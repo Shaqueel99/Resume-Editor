@@ -1,17 +1,28 @@
 """docx_editor.py
 
 Applies LLM-suggested changes to a résumé .docx file:
-  1. replace_bullets()      — find-and-replace existing bullets with
-                               accepted rewrite suggestions.
-  2. append_new_section()   — add a new "Additional Skills/Experience"
-                               section at the end of the document, with
-                               one or more newly drafted bullets.
+  1. replace_bullets()          — find-and-replace existing bullets with
+                                   accepted rewrite suggestions.
+  2. append_new_section()       — add a new "Additional Skills/Experience"
+                                   section at the end of the document, with
+                                   one or more newly drafted bullets.
+  3. list_bullet_entries()      — deterministically parse the existing
+                                   Work Experience / Project entries (and
+                                   their bullet lists) out of the .docx, so
+                                   the caller can offer them as insertion
+                                   targets.
+  4. insert_bullets_into_entries() — insert new bullets after a specific
+                                   existing entry's last bullet, instead of
+                                   only ever appending a new section.
 
-Both operations work on python-docx Document objects and save a new
+All operations work on python-docx Document objects and save a new
 file, leaving the original untouched.
 """
 
+from copy import deepcopy
+
 from docx import Document
+from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
 
@@ -130,5 +141,136 @@ def append_new_section(doc_path: str, out_path: str, new_bullets: list[str],
             doc.add_paragraph(bullet_text, style=bullet_style)
         else:
             doc.add_paragraph(f"• {bullet_text}")
+
+    doc.save(out_path)
+
+
+def _is_bullet_paragraph(paragraph: Paragraph) -> bool:
+    """Heuristically detect a résumé bullet-list item, since templates vary
+    in how they mark one: a named list style, direct Word list formatting
+    (numPr), or a manually-typed bullet character."""
+    style_name = paragraph.style.name if paragraph.style else ""
+    if "List Bullet" in style_name or "List Paragraph" in style_name:
+        return True
+
+    pPr = paragraph._p.find(qn("w:pPr"))
+    if pPr is not None and pPr.find(qn("w:numPr")) is not None:
+        return True
+
+    text = paragraph.text.strip()
+    return bool(text) and text[0] in "•‣▪◦-*"
+
+
+def _copy_paragraph_format(source: Paragraph, target: Paragraph) -> None:
+    """Copy list numbering (bullet/indent) from an existing bullet
+    paragraph onto a newly created one, for templates where bullets come
+    from direct list formatting rather than a named paragraph style."""
+    src_pPr = source._p.find(qn("w:pPr"))
+    if src_pPr is None:
+        return
+    src_numPr = src_pPr.find(qn("w:numPr"))
+    if src_numPr is None:
+        return
+    target._p.get_or_add_pPr().append(deepcopy(src_numPr))
+
+
+def _manual_bullet_prefix(paragraph: Paragraph) -> str:
+    """If a bullet's look comes from a literal leading character (no named
+    list style, no Word list numbering — just typed "• text"), return that
+    character plus one space, so a newly inserted bullet matches it. Real
+    list-style/numPr bullets render their glyph automatically and need no
+    prefix, so this returns "" for those."""
+    style_name = paragraph.style.name if paragraph.style else ""
+    if "List Bullet" in style_name or "List Paragraph" in style_name:
+        return ""
+    pPr = paragraph._p.find(qn("w:pPr"))
+    if pPr is not None and pPr.find(qn("w:numPr")) is not None:
+        return ""
+    text = paragraph.text.strip()
+    if text and text[0] in "•‣▪◦-*":
+        return text[0] + " "
+    return ""
+
+
+def list_bullet_entries(doc_path: str) -> list[dict]:
+    """Scan a résumé for existing Work Experience / Project entries that
+    have their own bullet list, so the caller can offer "add this new
+    bullet to an existing entry" as an alternative to appending a brand
+    new section.
+
+    An entry is a run of consecutive bullet paragraphs, labeled with the
+    nearest preceding non-bullet line of text (its job/project title) and
+    the nearest preceding heading-styled paragraph (its section, e.g.
+    "WORK EXPERIENCE"), if the document uses named heading styles at all.
+
+    Returns a list of dicts: {"section": str, "title": str,
+    "anchor_index": int}, where "anchor_index" is the paragraph index of
+    that entry's LAST bullet — the position insert_bullets_into_entries()
+    inserts a new bullet after. Indices are only valid against the exact
+    doc_path they were read from; re-read after any edit that adds or
+    removes paragraphs.
+    """
+    doc = Document(doc_path)
+    entries: list[dict] = []
+    current_section = ""
+    pending_title = ""
+    in_entry = False
+
+    for i, paragraph in enumerate(doc.paragraphs):
+        style_name = paragraph.style.name if paragraph.style else ""
+        text = paragraph.text.strip()
+
+        if style_name.startswith("Heading"):
+            current_section = text
+            pending_title = ""
+            in_entry = False
+            continue
+
+        if _is_bullet_paragraph(paragraph):
+            if in_entry:
+                entries[-1]["anchor_index"] = i
+            else:
+                entries.append({
+                    "section": current_section,
+                    "title": pending_title,
+                    "anchor_index": i,
+                })
+                in_entry = True
+            continue
+
+        if text:
+            pending_title = text
+            in_entry = False
+
+    return entries
+
+
+def insert_bullets_into_entries(doc_path: str, out_path: str,
+                                 entry_bullets: dict[int, list[str]]) -> None:
+    """Insert new bullets after specific existing entries, e.g. adding a
+    drafted skill-gap bullet into an existing Work Experience or Project
+    entry instead of a brand-new section.
+
+    Args:
+        doc_path: Path to the .docx to edit.
+        out_path: Path to save the result.
+        entry_bullets: Maps an "anchor_index" (from list_bullet_entries(),
+            read from THIS SAME doc_path before any other edit shifts
+            paragraph positions) to the bullet strings to insert there, in
+            order.
+    """
+    doc = Document(doc_path)
+    paragraphs = doc.paragraphs
+
+    for anchor_index, bullets in entry_bullets.items():
+        if not (0 <= anchor_index < len(paragraphs)):
+            continue
+        anchor = paragraphs[anchor_index]
+        for bullet_text in bullets:
+            text = _manual_bullet_prefix(anchor) + bullet_text
+            new_paragraph = doc.add_paragraph(text, style=anchor.style)
+            _copy_paragraph_format(anchor, new_paragraph)
+            anchor._p.addnext(new_paragraph._p)
+            anchor = new_paragraph
 
     doc.save(out_path)

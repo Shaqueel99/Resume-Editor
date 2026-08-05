@@ -17,8 +17,11 @@ Flow:
      draft, or accepted). Nothing moves into accepted_rewrites until the
      user clicks Accept.
   6. For skill gaps, user can optionally describe relevant experience;
-     DRAFT_NEW_BULLET_PROMPT turns it into a new bullet for a new
-     "Additional Skills / Experience" section.
+     DRAFT_NEW_BULLET_PROMPT turns it into a new bullet, shown directly in
+     the description box (editable, re-draftable). The user picks where it
+     goes: a new "Additional Skills / Experience" section, or an existing
+     Work Experience / Project entry — entries are found deterministically
+     via docx_editor.list_bullet_entries(), no LLM involved.
   7. Accepted rewrites + new bullets are applied to the .docx via
      docx_editor.py.
   8. "Apply and rescore": compute_ats_score() re-runs on the edited text,
@@ -50,8 +53,29 @@ from prompts import (
     DRAFT_NEW_BULLET_PROMPT,
 )
 from scoring import compute_ats_score
-from docx_editor import replace_bullets, append_new_section
+from docx_editor import (
+    replace_bullets,
+    append_new_section,
+    list_bullet_entries,
+    insert_bullets_into_entries,
+)
 import hashlib
+
+NEW_SECTION_OPTION = 'New "Additional Skills / Experience" section'
+
+
+def gap_target_options(resume_path: str) -> tuple[list[dict], list[str]]:
+    """Existing Work Experience / Project entries a drafted skill-gap
+    bullet could be inserted into, plus the default of appending it to a
+    brand new section. Recomputed fresh each call rather than cached in
+    session state, since it's a cheap deterministic parse and must stay in
+    sync with whichever file resume_path currently points to."""
+    entries = list_bullet_entries(resume_path)
+    labels = [
+        f"{e['section']} — {e['title']}" if e["section"] else e["title"]
+        for e in entries
+    ]
+    return entries, [NEW_SECTION_OPTION] + labels
 
 def bullet_key(original: str) -> str:
     """Stable per-bullet key derived from its text, so widget state follows
@@ -125,7 +149,7 @@ def reset_suggestion_state():
     st.session_state.pending_drafts = {}
     for k in [k for k in st.session_state.keys()
               if k.startswith(("choice_", "manual_", "feedback_", "regen_",
-                                "has_exp_", "exp_input_"))]:
+                                "has_exp_", "exp_input_", "target_"))]:
         del st.session_state[k]
 
 def show_overlay(message: str):
@@ -319,6 +343,8 @@ if st.session_state.assistant_output:
         st.divider()
         st.subheader("Skill gaps")
 
+        _, gap_target_choices = gap_target_options(st.session_state.resume_path)
+
         for gap in st.session_state.assistant_output["skill_gaps"]:
             with st.container(border=True):
                 st.write(f"**{gap['skill']}**")
@@ -340,6 +366,11 @@ if st.session_state.assistant_output:
                         key=input_key,
                         label_visibility="collapsed",
                         placeholder=f"What did you do with {gap['skill']}?",
+                    )
+                    st.selectbox(
+                        "Add this bullet to",
+                        gap_target_choices,
+                        key=f"target_{gap['skill']}",
                     )
                     if st.button("Draft a bullet", key=f"draft_{gap['skill']}"):
                         if candidate_input.strip():
@@ -379,14 +410,29 @@ if st.session_state.assistant_output:
 
             out_path = str(Path(tempfile.gettempdir()) / "resume_edited.docx")
 
-            new_bullets = [
-                text for skill in st.session_state.drafted_gaps
-                if (text := st.session_state.get(f"exp_input_{skill}", "").strip())
-            ]
+            entries, target_choices = gap_target_options(st.session_state.resume_path)
+            new_section_bullets = []
+            entry_bullets: dict[int, list[str]] = {}
+            for skill in st.session_state.drafted_gaps:
+                text = st.session_state.get(f"exp_input_{skill}", "").strip()
+                if not text:
+                    continue
+                choice = st.session_state.get(f"target_{skill}", NEW_SECTION_OPTION)
+                try:
+                    choice_idx = target_choices.index(choice)
+                except ValueError:
+                    choice_idx = 0
+                if choice_idx == 0:
+                    new_section_bullets.append(text)
+                else:
+                    anchor_index = entries[choice_idx - 1]["anchor_index"]
+                    entry_bullets.setdefault(anchor_index, []).append(text)
 
             result = replace_bullets(st.session_state.resume_path, out_path, replacements)
-            if new_bullets:
-                append_new_section(out_path, out_path, new_bullets)
+            if entry_bullets:
+                insert_bullets_into_entries(out_path, out_path, entry_bullets)
+            if new_section_bullets:
+                append_new_section(out_path, out_path, new_section_bullets)
 
             if result["not_found"]:
                 st.warning(f"{len(result['not_found'])} suggestion(s) couldn't be located and were skipped.")
