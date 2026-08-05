@@ -51,6 +51,12 @@ from prompts import (
 )
 from scoring import compute_ats_score
 from docx_editor import replace_bullets, append_new_section
+import hashlib
+
+def bullet_key(original: str) -> str:
+    """Stable per-bullet key derived from its text, so widget state follows
+    the bullet rather than its position in a list that changes between rounds."""
+    return hashlib.md5(original.encode()).hexdigest()[:8]
 
 load_dotenv()
 
@@ -90,6 +96,35 @@ def reset_suggestion_state():
     st.session_state.accepted_rewrites = {}
     st.session_state.accepted_reasons = {}
     st.session_state.new_bullets = []
+
+
+def collect_replacements() -> list[dict]:
+    """Build the replacement list by reading current widget state, so there
+    is exactly one source of truth and no dict/widget drift."""
+    replacements = []
+    for item in st.session_state.assistant_output["bullet_rewrites"]:
+        original = item["original_text"]
+        bk = bullet_key(original)
+        choice = st.session_state.get(f"choice_{bk}", "Skip")
+
+        if choice == "Use suggestion":
+            new_text = st.session_state.current_suggestions.get(original, item["suggested_text"])
+        elif choice == "Write my own":
+            new_text = st.session_state.get(f"manual_{bk}", "").strip()
+        else:
+            continue
+
+        if new_text and new_text != original:
+            replacements.append({"original_text": original, "suggested_text": new_text})
+    return replacements
+
+def reset_suggestion_state():
+    st.session_state.current_suggestions = {}
+    st.session_state.current_reasons = {}
+    st.session_state.new_bullets = []
+    for k in [k for k in st.session_state.keys()
+              if k.startswith(("choice_", "manual_", "feedback_", "regen_"))]:
+        del st.session_state[k]
 
 def show_overlay(message: str):
     """Full-page dimmed overlay with a centered message. Call before a
@@ -154,7 +189,7 @@ with st.container(border=True):
     with upload_col:
         resume_file = st.file_uploader("Upload résumé (.docx)", type=["docx"])
     with jd_col:
-        jd_text = st.text_area("Paste job description", height=120)
+        jd_text = st.text_area("Paste job description", height=300)
 
     run = st.button("Check fit", type="primary")
 
@@ -219,19 +254,12 @@ if st.session_state.assistant_output:
     st.divider()
     st.subheader("Bullet suggestions")
 
-    for i, item in enumerate(st.session_state.assistant_output["bullet_rewrites"]):
+    for item in st.session_state.assistant_output["bullet_rewrites"]:
         original = item["original_text"]
-        is_accepted = original in st.session_state.accepted_rewrites
+        bk = bullet_key(original)
 
-        if is_accepted:
-            suggested = st.session_state.accepted_rewrites[original]
-            reason = st.session_state.accepted_reasons.get(original, item["reason"])
-        elif original in st.session_state.current_suggestions:
-            suggested = st.session_state.current_suggestions[original]
-            reason = st.session_state.current_reasons.get(original, item["reason"])
-        else:
-            suggested = item["suggested_text"]
-            reason = item["reason"]
+        suggested = st.session_state.current_suggestions.get(original, item["suggested_text"])
+        reason = st.session_state.current_reasons.get(original, item["reason"])
 
         with st.container(border=True):
             st.caption("original")
@@ -240,41 +268,49 @@ if st.session_state.assistant_output:
             st.write(suggested)
             st.caption(reason)
 
-            btn_col, fb_col, regen_col = st.columns([1, 3, 1])
-            with btn_col:
-                if is_accepted:
-                    st.button("Accepted ✓", key=f"accept_{i}", disabled=True)
-                else:
-                    if st.button("Accept", key=f"accept_{i}"):
-                        st.session_state.accepted_rewrites[original] = suggested
-                        st.session_state.accepted_reasons[original] = reason
+            choice = st.radio(
+                "What do you want to do with this bullet?",
+                ["Skip", "Use suggestion", "Write my own"],
+                key=f"choice_{bk}",
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+
+            if choice == "Use suggestion":
+                fb_col, regen_col = st.columns([4, 1])
+                with fb_col:
+                    feedback = st.text_input(
+                        "Ask for a different version",
+                        key=f"feedback_{bk}",
+                        label_visibility="collapsed",
+                        placeholder="e.g. make it more concise",
+                    )
+                with regen_col:
+                    if st.button("Regenerate", key=f"regen_{bk}") and feedback.strip():
+                        with st.spinner("Regenerating..."):
+                            result = safe_call(
+                                "Bullet regeneration", ask_json, REGENERATE_BULLET_PROMPT,
+                                json.dumps({
+                                    "original_text": suggested,
+                                    "jd_text": jd_text,
+                                    "feedback": feedback,
+                                }),
+                            )
+                        st.session_state.current_suggestions[original] = result["new_text"]
+                        st.session_state.current_reasons[original] = result["reason"]
+                        if result["note"]:
+                            st.warning(result["note"])
                         st.rerun()
-            with fb_col:
-                feedback = st.text_input(
-                    "Ask for a different version",
-                    key=f"feedback_{i}",
+
+            elif choice == "Write my own":
+                st.text_area(
+                    "Your version",
+                    key=f"manual_{bk}",
                     label_visibility="collapsed",
-                    placeholder="e.g. make it more concise",
-                    disabled=is_accepted,
+                    placeholder="Type your replacement bullet here",
                 )
-            with regen_col:
-                if st.button("Regenerate", key=f"regen_{i}", disabled=is_accepted) and feedback.strip():
-                    with st.spinner("Regenerating..."):
-                        result = safe_call(
-                            "Bullet regeneration",
-                            ask_json,
-                            REGENERATE_BULLET_PROMPT,
-                            json.dumps({
-                                "original_text": suggested,
-                                "jd_text": jd_text,
-                                "feedback": feedback,
-                            }),
-                        )
-                    st.session_state.current_suggestions[original] = result["new_text"]
-                    st.session_state.current_reasons[original] = result["reason"]
-                    if result["note"]:
-                        st.warning(result["note"])
-                    st.rerun()
+                if not st.session_state.get(f"manual_{bk}", "").strip():
+                    st.caption("Enter your version above, or it will be skipped.")
 
     if st.session_state.assistant_output["skill_gaps"]:
         st.divider()
