@@ -34,6 +34,12 @@ Flow:
      results" button — instead of leaving the user scrolled down to
      stale content with no way back to the top.
   9. Download button for the edited .docx.
+
+Anywhere the score row is shown, a "Preview résumé" expander renders the
+current résumé (original or edited, tracking st.session_state.resume_path)
+inline via mammoth's docx-to-HTML conversion — a semantic approximation
+(headings/bold/bullets), not a pixel-perfect Word render, in a sandboxed
+iframe so its CSS can't leak into the page.
 """
 
 import json
@@ -41,7 +47,9 @@ import tempfile
 import traceback
 from pathlib import Path
 
+import mammoth
 import streamlit as st
+import streamlit.components.v1 as components
 from docx import Document
 from dotenv import load_dotenv
 from streamlit_scroll_to_top import scroll_to_here
@@ -184,6 +192,48 @@ def show_overlay(message: str):
         unsafe_allow_html=True,
     )
     return placeholder
+
+
+MAMMOTH_STYLE_MAP = """
+p[style-name='Title'] => h1.resume-name:fresh
+p[style-name='Subtitle'] => p.resume-contact:fresh
+"""
+
+RESUME_PREVIEW_CSS = """
+body { margin: 0; padding: 20px; background: #eef0f3; font-family: 'Segoe UI', Arial, sans-serif; }
+.page { background: #ffffff; max-width: 800px; margin: 0 auto; padding: 40px 48px;
+        border-radius: 4px; box-shadow: 0 2px 12px rgba(0,0,0,0.12); color: #1a1a1a; line-height: 1.5; }
+.page h1 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;
+           border-bottom: 2px solid #333; padding-bottom: 4px; margin: 20px 0 8px; }
+.page h1.resume-name { font-size: 26px; text-transform: none; letter-spacing: normal;
+                        border-bottom: none; margin-top: 0; }
+.page h2 { font-size: 14px; margin: 14px 0 2px; }
+.page p.resume-contact { color: #555; font-size: 13px; margin: 0 0 8px; }
+.page p { font-size: 13.5px; margin: 4px 0; }
+.page ul { margin: 4px 0 12px; padding-left: 20px; }
+.page li { font-size: 13.5px; margin-bottom: 3px; }
+.page strong { font-weight: 600; }
+.page a { color: #2563eb; }
+"""
+
+
+def render_resume_preview(docx_path: str, height: int = 900) -> None:
+    """Render a résumé .docx inline via mammoth's docx-to-HTML conversion,
+    so the user can see roughly how it looks without downloading it. This
+    is a semantic HTML approximation (headings/bold/bullets/paragraphs
+    mapped from Word styles) — not a pixel-perfect render of the original
+    Word layout, since that would require an external tool like LibreOffice.
+    Rendered inside a sandboxed iframe (components.html) so its CSS can't
+    leak into the rest of the page."""
+    with open(docx_path, "rb") as f:
+        result = mammoth.convert_to_html(f, style_map=MAMMOTH_STYLE_MAP)
+
+    components.html(
+        f"<html><head><style>{RESUME_PREVIEW_CSS}</style></head>"
+        f'<body><div class="page">{result.value}</div></body></html>',
+        height=height,
+        scrolling=True,
+    )
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
@@ -277,6 +327,9 @@ if st.session_state.assistant_output:
     if current["missing_required"]:
         label = "Still missing" if after else "Missing"
         st.caption(f"{label}: " + ", ".join(current["missing_required"]))
+
+    with st.expander("Preview résumé"):
+        render_resume_preview(st.session_state.resume_path)
 
     st.divider()
     st.subheader("Bullet suggestions")
