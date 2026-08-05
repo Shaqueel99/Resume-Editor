@@ -10,29 +10,26 @@ Flow:
      that specifically surface JD terminology (LLM call 2).
   5. User reviews suggestions in a working-draft state (current_suggestions
      / current_reasons) and can regenerate a bullet with feedback any
-     number of times before explicitly accepting — regeneration feeds the
-     CURRENT draft back in, not the résumé's original text, so feedback
-     compounds instead of resetting. The displayed "reason" caption tracks
-     whichever version is showing (original suggestion, mid-regeneration
-     draft, or accepted). Nothing moves into accepted_rewrites until the
-     user clicks Accept.
+     number of times — regeneration feeds the CURRENT draft back in, not
+     the résumé's original text, so feedback compounds instead of
+     resetting. The displayed "reason" caption tracks whichever version is
+     showing (original suggestion or mid-regeneration draft). Each
+     bullet's Skip / Use suggestion / Write my own radio choice is the
+     final decision — collect_replacements() reads it live at apply time,
+     there is no separate "Accept" step.
   6. For skill gaps, user can optionally describe relevant experience;
      DRAFT_NEW_BULLET_PROMPT turns it into a new bullet, shown directly in
      the description box (editable, re-draftable). The user picks where it
      goes: a new "Additional Skills / Experience" section, or an existing
      Work Experience / Project entry — entries are found deterministically
      via docx_editor.list_bullet_entries(), no LLM involved.
-  7. Accepted rewrites + new bullets are applied to the .docx via
-     docx_editor.py.
+  7. Chosen rewrites + drafted skill-gap bullets are applied to the .docx
+     via docx_editor.py.
   8. "Apply and rescore": compute_ats_score() re-runs on the edited text,
      against the SAME skill list used for "before", so the before/after
      comparison stays trustworthy — this is deterministic and does not
      call the LLM. Separately, ASSISTANT_PROMPT is re-run against the
      edited résumé to refresh suggestions for another round of edits.
-     After this completes, results are hidden (show_results=False) so
-     the page renders short — just the upload box plus a "Show updated
-     results" button — instead of leaving the user scrolled down to
-     stale content with no way back to the top.
   9. Download button for the edited .docx.
 
 Anywhere the score row is shown, a "Preview résumé" expander renders the
@@ -116,18 +113,6 @@ def extract_docx_text(path: str) -> str:
     """Flatten a .docx's paragraph text into a single string for LLM input."""
     doc = Document(path)
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-
-
-def reset_suggestion_state():
-    """Clear per-bullet working state. Called after a fresh analysis and
-    after every apply-and-rescore round, since old entries are keyed by
-    bullet text that may no longer exist verbatim in the current document.
-    """
-    st.session_state.current_suggestions = {}
-    st.session_state.current_reasons = {}
-    st.session_state.accepted_rewrites = {}
-    st.session_state.accepted_reasons = {}
-    st.session_state.new_bullets = []
 
 
 def collect_replacements() -> list[dict]:
@@ -245,13 +230,13 @@ for key, default in [
     ("assistant_output", None),
     ("current_suggestions", {}),
     ("current_reasons", {}),
-    ("accepted_rewrites", {}),
-    ("accepted_reasons", {}),
     ("drafted_gaps", set()),
     ("pending_drafts", {}),
     ("edited_path", None),
     ("after_score", None),
     ("pending_scroll", False),
+    ("preview_expanded", False),
+    ("preview_key_version", 0),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -328,7 +313,11 @@ if st.session_state.assistant_output:
         label = "Still missing" if after else "Missing"
         st.caption(f"{label}: " + ", ".join(current["missing_required"]))
 
-    with st.expander("Preview résumé", key="preview_expanded"):
+    with st.expander(
+        "Preview résumé",
+        expanded=st.session_state.preview_expanded,
+        key=f"preview_expander_{st.session_state.preview_key_version}",
+    ):
         render_resume_preview(st.session_state.resume_path)
 
     st.divider()
@@ -456,10 +445,7 @@ if st.session_state.assistant_output:
         if st.button("Apply changes and rescore", type="primary", use_container_width=True):
             overlay = show_overlay("Applying changes and rescoring…")
 
-            replacements = [
-                {"original_text": orig, "suggested_text": new}
-                for orig, new in st.session_state.accepted_rewrites.items()
-            ]
+            replacements = collect_replacements()
 
             out_path = str(Path(tempfile.gettempdir()) / "resume_edited.docx")
 
@@ -510,6 +496,7 @@ if st.session_state.assistant_output:
             overlay.empty()
             st.session_state.pending_scroll = True
             st.session_state.preview_expanded = True
+            st.session_state.preview_key_version += 1
             st.rerun()
 
     with download_col:
