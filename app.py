@@ -122,6 +122,7 @@ def reset_suggestion_state():
     st.session_state.current_suggestions = {}
     st.session_state.current_reasons = {}
     st.session_state.drafted_gaps = set()
+    st.session_state.pending_drafts = {}
     for k in [k for k in st.session_state.keys()
               if k.startswith(("choice_", "manual_", "feedback_", "regen_",
                                 "has_exp_", "exp_input_"))]:
@@ -173,6 +174,7 @@ for key, default in [
     ("accepted_rewrites", {}),
     ("accepted_reasons", {}),
     ("drafted_gaps", set()),
+    ("pending_drafts", {}),
     ("edited_path", None),
     ("after_score", None),
     ("pending_scroll", False),
@@ -331,6 +333,8 @@ if st.session_state.assistant_output:
                 )
                 if has_exp == "Yes":
                     input_key = f"exp_input_{gap['skill']}"
+                    if gap["skill"] in st.session_state.pending_drafts:
+                        st.session_state[input_key] = st.session_state.pending_drafts.pop(gap["skill"])
                     candidate_input = st.text_area(
                         "Briefly describe it",
                         key=input_key,
@@ -352,7 +356,7 @@ if st.session_state.assistant_output:
                                 )
                             if result["new_bullet"]:
                                 st.session_state.drafted_gaps.add(gap["skill"])
-                                st.session_state[input_key] = result["new_bullet"]
+                                st.session_state.pending_drafts[gap["skill"]] = result["new_bullet"]
                                 st.rerun()
                             else:
                                 st.warning(result["note"])
