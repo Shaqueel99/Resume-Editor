@@ -133,10 +133,10 @@ st.caption("Upload your résumé, paste a job post, see exactly what to change")
 
 
 
-def safe_call(label, fn, *args):
+def safe_call(label, fn, *args, **kwargs):
     """Run an LLM-calling function, surfacing the real error in the UI."""
     try:
-        return fn(*args)
+        return fn(*args, **kwargs)
     except Exception as e:
         st.error(f"{label} failed: {e}")
         st.code(traceback.format_exc())
@@ -310,7 +310,7 @@ if run:
 
     user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
     st.session_state.assistant_output = safe_call(
-        "Résumé analysis", ask_json, ASSISTANT_PROMPT, user_msg
+        "Résumé analysis", ask_json, ASSISTANT_PROMPT, user_msg, max_tokens=3000
     )
     st.session_state.assistant_output["bullet_rewrites"] = dedupe_bullet_rewrites(
         st.session_state.assistant_output["bullet_rewrites"]
@@ -527,7 +527,7 @@ if st.session_state.assistant_output:
 
             user_msg = json.dumps({"resume_text": edited_text, "jd_text": jd_text})
             st.session_state.assistant_output = safe_call(
-                "Résumé re-analysis", ask_json, ASSISTANT_PROMPT, user_msg
+                "Résumé re-analysis", ask_json, ASSISTANT_PROMPT, user_msg, max_tokens=3000
             )
             st.session_state.assistant_output["bullet_rewrites"] = dedupe_bullet_rewrites(
                 st.session_state.assistant_output["bullet_rewrites"]
