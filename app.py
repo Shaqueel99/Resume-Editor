@@ -87,6 +87,40 @@ def bullet_key(original: str) -> str:
     the bullet rather than its position in a list that changes between rounds."""
     return hashlib.md5(original.encode()).hexdigest()[:8]
 
+
+def dedupe_bullet_rewrites(bullet_rewrites: list[dict]) -> list[dict]:
+    """Drop rewrite suggestions that repeat an original_text already seen
+    earlier in the list. The LLM occasionally emits more than one
+    suggestion for the same bullet (most often after a few apply +
+    re-analyze rounds); since every widget for a bullet is keyed off
+    bullet_key(original_text), a duplicate collides on that key and
+    crashes with StreamlitDuplicateElementKey."""
+    seen = set()
+    deduped = []
+    for item in bullet_rewrites:
+        original = item["original_text"]
+        if original in seen:
+            continue
+        seen.add(original)
+        deduped.append(item)
+    return deduped
+
+
+def dedupe_skill_gaps(skill_gaps: list[dict]) -> list[dict]:
+    """Drop skill gaps that repeat a skill name already seen earlier in
+    the list, for the same reason as dedupe_bullet_rewrites() — every
+    skill-gap widget is keyed off gap['skill'] directly, and a duplicate
+    skill name collides on that key."""
+    seen = set()
+    deduped = []
+    for gap in skill_gaps:
+        skill = gap["skill"]
+        if skill in seen:
+            continue
+        seen.add(skill)
+        deduped.append(gap)
+    return deduped
+
 load_dotenv()
 
 st.set_page_config(page_title="Résumé fit checker", layout="wide")
@@ -277,6 +311,12 @@ if run:
     user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
     st.session_state.assistant_output = safe_call(
         "Résumé analysis", ask_json, ASSISTANT_PROMPT, user_msg
+    )
+    st.session_state.assistant_output["bullet_rewrites"] = dedupe_bullet_rewrites(
+        st.session_state.assistant_output["bullet_rewrites"]
+    )
+    st.session_state.assistant_output["skill_gaps"] = dedupe_skill_gaps(
+        st.session_state.assistant_output["skill_gaps"]
     )
 
     reset_suggestion_state()
@@ -488,6 +528,12 @@ if st.session_state.assistant_output:
             user_msg = json.dumps({"resume_text": edited_text, "jd_text": jd_text})
             st.session_state.assistant_output = safe_call(
                 "Résumé re-analysis", ask_json, ASSISTANT_PROMPT, user_msg
+            )
+            st.session_state.assistant_output["bullet_rewrites"] = dedupe_bullet_rewrites(
+                st.session_state.assistant_output["bullet_rewrites"]
+            )
+            st.session_state.assistant_output["skill_gaps"] = dedupe_skill_gaps(
+                st.session_state.assistant_output["skill_gaps"]
             )
 
             st.session_state.resume_path = out_path
