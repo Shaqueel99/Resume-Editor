@@ -39,17 +39,33 @@ typically separate "must-have" or "required" qualifications from \
 "nice-to-have" or "preferred" ones, though the exact wording varies by \
 company. Your output will be used to check, by exact and near-exact text \
 matching, whether each skill literally appears in a résumé — so each \
-entry must be a short, specific term (a technology, tool, language, or \
-named qualification), not a sentence or a vague category.
+entry must be a short, specific term, not a sentence. This applies \
+equally to technical skills (a technology, tool, language, or named \
+qualification) and to soft/interpersonal skills (e.g. problem-solving, \
+teamwork, communication) — JDs routinely state the latter as a full \
+sentence ("Strong problem-solving skills and ability to work \
+effectively in a team-oriented environment"), and that sentence must \
+still be condensed down to short terms rather than dropped, since a \
+soft skill the JD explicitly requires is exactly as real a requirement \
+as a named technology.
 
 CONSTRAINTS
-- Only extract skills, tools, and qualifications that are literally \
-stated in the JD text. Never invent, infer, or add skills that are not \
-mentioned.
+- Only extract skills, tools, qualifications, and soft/interpersonal \
+competencies that are literally stated in the JD text. Never invent, \
+infer, or add ones that are not mentioned.
 - Each entry must be a short noun phrase (1-4 words) naming one specific \
-skill, tool, language, or framework — e.g. "React.js", "AWS RDS", \
-"Spring Boot", "MySQL". Do not return full sentences or bullet-length \
-phrases.
+skill, tool, language, framework, or competency — e.g. "React.js", \
+"AWS RDS", "Spring Boot", "MySQL", "Problem-solving", "Teamwork", \
+"Communication". Do not return full sentences or bullet-length phrases.
+- For technical skills, preserve the JD's own terminology; do not \
+substitute synonyms or expand abbreviations. For soft/interpersonal \
+skills, the JD's phrasing is usually a full sentence rather than a term \
+— condense it to the standard short name(s) for the competency it \
+describes (e.g. "ability to work effectively in a team-oriented \
+environment" -> "Teamwork", "excellent communication and collaboration \
+skills" -> "Communication" and "Collaboration"). If one JD sentence \
+names more than one distinct competency, extract each as its own entry \
+rather than combining them into one.
 - Classify a skill as "required" only if the JD's own language marks it \
 as mandatory (e.g. "must have", "required", listed under a \
 "Requirements" heading). Classify as "preferred" if the JD marks it as \
@@ -60,11 +76,9 @@ given skill, use your best judgment from context, but do not invent \
 qualifications that are not mentioned anywhere.
 - Deduplicate entries. Do not list the same skill twice, including \
 near-duplicates (e.g. "JS" and "JavaScript" — pick the JD's own wording \
-once).
+once; "Teamwork" mentioned twice in different sections — list it once).
 - If either array would be empty, return an empty array [] rather than \
 omitting the field or guessing content.
-- Preserve the JD's own terminology for each skill; do not substitute \
-synonyms or expand abbreviations.
 
 OUTPUT
 Return a JSON object with exactly this schema:
