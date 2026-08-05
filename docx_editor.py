@@ -148,13 +148,24 @@ def append_new_section(doc_path: str, out_path: str, new_bullets: list[str],
 def _is_bullet_paragraph(paragraph: Paragraph) -> bool:
     """Heuristically detect a résumé bullet-list item, since templates vary
     in how they mark one: a named list style, direct Word list formatting
-    (numPr), or a manually-typed bullet character."""
-    style_name = paragraph.style.name if paragraph.style else ""
-    if "List Bullet" in style_name or "List Paragraph" in style_name:
+    (numPr), or a manually-typed bullet character.
+
+    A numPr with numId="0" is checked FIRST and short-circuits to False
+    even when the paragraph carries a "List Bullet"-ish style: numId="0"
+    is Word's standard sentinel for "no numbering", which templates use
+    for blank spacer lines that keep a bullet style's spacing/indent
+    without actually showing a bullet. Treating those as real bullets
+    misidentifies them as an entry's last bullet."""
+    pPr = paragraph._p.find(qn("w:pPr"))
+    numPr = pPr.find(qn("w:numPr")) if pPr is not None else None
+    if numPr is not None:
+        numId = numPr.find(qn("w:numId"))
+        if numId is not None and numId.get(qn("w:val")) == "0":
+            return False
         return True
 
-    pPr = paragraph._p.find(qn("w:pPr"))
-    if pPr is not None and pPr.find(qn("w:numPr")) is not None:
+    style_name = paragraph.style.name if paragraph.style else ""
+    if "List Bullet" in style_name or "List Paragraph" in style_name:
         return True
 
     text = paragraph.text.strip()
@@ -207,9 +218,13 @@ def list_bullet_entries(doc_path: str) -> list[dict]:
     new section.
 
     An entry is a run of consecutive bullet paragraphs, labeled with the
-    nearest preceding non-bullet line of text (its job/project title) and
-    the nearest preceding heading-styled paragraph (its section, e.g.
-    "WORK EXPERIENCE"), if the document uses named heading styles at all.
+    nearest preceding non-bullet line of text (its job/project title — this
+    is commonly styled "Heading 2", but may just as well be plain body
+    text) and the nearest preceding "Heading 1"-styled paragraph (its
+    section, e.g. "WORK EXPERIENCE"), if the document uses that style at
+    all. Only "Heading 1" resets the section — lower heading levels (e.g.
+    "Heading 2" job titles) are treated as an ordinary title line, matching
+    the "Heading 1" section style append_new_section() itself assumes.
 
     Returns a list of dicts: {"section": str, "title": str,
     "anchor_index": int}, where "anchor_index" is the paragraph index of
@@ -228,7 +243,7 @@ def list_bullet_entries(doc_path: str) -> list[dict]:
         style_name = paragraph.style.name if paragraph.style else ""
         text = paragraph.text.strip()
 
-        if style_name.startswith("Heading"):
+        if style_name == "Heading 1":
             current_section = text
             pending_title = ""
             in_entry = False
