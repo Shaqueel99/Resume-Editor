@@ -12,6 +12,11 @@ only meaningful if scoring is independent of generation.
 Matching is done on normalized text (see _normalize) rather than raw
 substrings, so minor wording variants like "React.js" vs "React" still
 match — without needing an LLM judgment call in the scoring path itself.
+A skill phrase is considered present if all of its words appear close
+together in the résumé (see _is_present), not only if the exact phrase
+appears verbatim in the JD's own word order — a résumé bullet phrased
+as "Set up Linux environment" should still count for a JD skill listed
+as "Linux environment setup".
 """
 
 import re
@@ -19,14 +24,17 @@ import re
 
 def _normalize(text: str) -> str:
     """Lowercase, turn punctuation into spaces, strip standalone "js"
-    tokens, and strip trailing version digits from words (e.g. "html5"
-    -> "html", "css3" -> "css") — so "HTML5"/"HTML" and "CSS3"/"CSS"
-    both normalize to the same token, alongside the existing
-    "React.js"/"React" handling.
+    tokens, merge "set up" into "setup" so that verb-phrase and
+    noun-phrase forms of the same skill normalize the same way, and
+    strip trailing version digits from words (e.g. "html5" -> "html",
+    "css3" -> "css") — so "HTML5"/"HTML" and "CSS3"/"CSS" both
+    normalize to the same token, alongside the existing "React.js"/
+    "React" handling.
     """
     s = text.lower().strip()
     s = re.sub(r'[^\w\s]', ' ', s)        # punctuation -> space
     s = re.sub(r'\bjs\b', '', s)           # strip standalone "js" token
+    s = re.sub(r'\bset up\b', 'setup', s)  # "set up" -> "setup"
     s = re.sub(r'([a-z]+)\d+\b', r'\1', s)  # "html5" -> "html", "css3" -> "css"
     s = re.sub(r'\s+', ' ', s).strip()
     return s
@@ -48,10 +56,29 @@ def compute_ats_score(resume_text: str, required_skills: list[str], preferred_sk
         so the UI still shows the JD's own wording to the user.
     """
     preferred_skills = preferred_skills or []
-    resume_normalized = _normalize(resume_text)
+    resume_words = _normalize(resume_text).split()
 
     def _is_present(skill: str) -> bool:
-        return _normalize(skill) in resume_normalized
+        """A skill is present if all of its words occur together within a
+        small window of résumé text, in any order — not only if the exact
+        phrase appears verbatim. Real bullets often phrase a skill as a
+        verb ("Set up Linux environment") where the JD lists it as a noun
+        phrase ("Linux environment setup"); requiring the JD's own word
+        order would wrongly mark those as missing. The window (skill
+        length + 2) allows a couple of interleaving words — e.g. "Set up
+        Linux environment FOR TESTING" — without matching skill words that
+        are merely scattered, unrelated, across the whole résumé."""
+        skill_words = _normalize(skill).split()
+        if not skill_words:
+            return False
+        skill_set = set(skill_words)
+        window_size = min(len(resume_words), len(skill_words) + 2)
+        if window_size < len(skill_words):
+            return False
+        return any(
+            skill_set <= set(resume_words[i:i + window_size])
+            for i in range(len(resume_words) - window_size + 1)
+        )
 
     found_required = [s for s in required_skills if _is_present(s)]
     missing_required = [s for s in required_skills if not _is_present(s)]
