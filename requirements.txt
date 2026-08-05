@@ -5,3 +5,4 @@ pypdf>=4.0.0
 streamlit>=1.30.0
 streamlit-scroll-to-top
 python-docx
+mammoth

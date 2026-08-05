@@ -6,86 +6,179 @@ Flow:
   1. User uploads a .docx résumé and pastes a JD.
   2. JD_SKILLS_PROMPT extracts required/preferred skills (LLM call 1).
   3. compute_ats_score() scores the résumé as-is — deterministic, no LLM.
-  4. ASSISTANT_PROMPT generates skill gaps + bullet rewrite suggestions
-     that surface JD terminology already implied by a bullet's wording.
-     Output passes through validate_rewrites() first — a code-level check
-     that the rewrite kept the original's content words and didn't invent
-     new technical terms, since prompt instructions alone did not reliably
-     prevent either.
-  5. Per bullet, the user picks one of three options via a single radio:
-     Skip, Use suggestion, or Write my own. The radio makes the choices
-     mutually exclusive structurally, so there is no separate "accepted"
-     dict to drift out of sync — widget state IS the source of truth,
-     read back at apply time by collect_replacements(). Within "Use
-     suggestion", the user can regenerate with feedback repeatedly;
-     regeneration feeds the CURRENT draft back in, not the résumé's
-     original text, so feedback compounds instead of resetting.
-  6. For skill gaps, the user can describe relevant experience they have;
-     DRAFT_NEW_BULLET_PROMPT phrases it into a new bullet for a new
-     "Additional Skills / Experience" section. Facts come from the user,
-     not the model.
-  7. Chosen rewrites + new bullets are applied to the .docx via
-     docx_editor.py.
-  8. "Apply and rescore": compute_ats_score() re-runs on the edited text
-     against the SAME skill list used for "before", so the comparison
-     stays trustworthy — deterministic, no LLM. Separately,
-     ASSISTANT_PROMPT re-runs against the edited résumé to refresh
-     suggestions for another round.
+  4. SKILL_GAPS_PROMPT and BULLET_REWRITES_PROMPT each generate their own
+     half of what used to be one combined response — skill gaps (incl.
+     soft skills) and bullet rewrites that surface JD terminology,
+     respectively — merged into a single assistant_output dict (LLM
+     calls 2-3). Split into two focused calls because one call trying to
+     do both, and produce one large nested JSON object, made a
+     smaller/cheaper model's output both less reliable (prone to
+     stopping mid-JSON) and shallower when trimmed for reliability.
+  5. User reviews suggestions in a working-draft state (current_suggestions
+     / current_reasons) and can regenerate a bullet with feedback any
+     number of times — regeneration feeds the CURRENT draft back in, not
+     the résumé's original text, so feedback compounds instead of
+     resetting. The displayed "reason" caption tracks whichever version is
+     showing (original suggestion or mid-regeneration draft). Each
+     bullet's Skip / Use suggestion / Write my own radio choice is the
+     final decision — collect_replacements() reads it live at apply time,
+     there is no separate "Accept" step.
+  6. For skill gaps, user can optionally describe relevant experience;
+     DRAFT_NEW_BULLET_PROMPT turns it into a new bullet, shown directly in
+     the description box (editable, re-draftable). The user picks where it
+     goes: a new "Additional Skills / Experience" section, or an existing
+     Work Experience / Project entry — entries are found deterministically
+     via docx_editor.list_bullet_entries(), no LLM involved.
+  7. Chosen rewrites + drafted skill-gap bullets are applied to the .docx
+     via docx_editor.py.
+  8. "Apply and rescore": compute_ats_score() re-runs on the edited text,
+     against the SAME skill list used for "before", so the before/after
+     comparison stays trustworthy — this is deterministic and does not
+     call the LLM. Separately, SKILL_GAPS_PROMPT and BULLET_REWRITES_PROMPT
+     are re-run against the edited résumé to refresh suggestions for
+     another round of edits.
   9. Download button for the edited .docx.
 
-Widget keys are hashed from the item's own text rather than its list
-index, so state follows the item across rounds where the suggestion list
-changes length or order.
+Anywhere the score row is shown, a "Preview résumé" expander renders the
+current résumé (original or edited, tracking st.session_state.resume_path)
+inline via mammoth's docx-to-HTML conversion — a semantic approximation
+(headings/bold/bullets), not a pixel-perfect Word render, in a sandboxed
+iframe so its CSS can't leak into the page.
 """
 
-import hashlib
 import json
-import os
 import tempfile
 import traceback
 from pathlib import Path
 
+import mammoth
 import streamlit as st
+import streamlit.components.v1 as components
 from docx import Document
 from dotenv import load_dotenv
 from streamlit_scroll_to_top import scroll_to_here
-
 from llm import ask_json
 from prompts import (
     JD_SKILLS_PROMPT,
-    ASSISTANT_PROMPT,
+    SKILL_GAPS_PROMPT,
+    BULLET_REWRITES_PROMPT,
     REGENERATE_BULLET_PROMPT,
     DRAFT_NEW_BULLET_PROMPT,
 )
 from scoring import compute_ats_score
-from docx_editor import replace_bullets, append_new_section
+from docx_editor import (
+    replace_bullets,
+    append_new_section,
+    list_bullet_entries,
+    insert_bullets_into_entries,
+)
+import hashlib
 
-# set_page_config must be the first Streamlit call in the script.
+NEW_SECTION_OPTION = 'New "Additional Skills / Experience" section'
+
+
+def gap_target_options(resume_path: str) -> tuple[list[dict], list[str]]:
+    """Existing Work Experience / Project entries a drafted skill-gap
+    bullet could be inserted into, plus the default of appending it to a
+    brand new section. Recomputed fresh each call rather than cached in
+    session state, since it's a cheap deterministic parse and must stay in
+    sync with whichever file resume_path currently points to."""
+    entries = list_bullet_entries(resume_path)
+    labels = [
+        f"{e['section']} — {e['title']}" if e["section"] else e["title"]
+        for e in entries
+    ]
+    return entries, [NEW_SECTION_OPTION] + labels
+
+def bullet_key(original: str) -> str:
+    """Stable per-bullet key derived from its text, so widget state follows
+    the bullet rather than its position in a list that changes between rounds."""
+    return hashlib.md5(original.encode()).hexdigest()[:8]
+
+
+def dedupe_bullet_rewrites(bullet_rewrites: list[dict]) -> list[dict]:
+    """Drop rewrite suggestions that repeat an original_text already seen
+    earlier in the list. The LLM occasionally emits more than one
+    suggestion for the same bullet (most often after a few apply +
+    re-analyze rounds); since every widget for a bullet is keyed off
+    bullet_key(original_text), a duplicate collides on that key and
+    crashes with StreamlitDuplicateElementKey."""
+    seen = set()
+    deduped = []
+    for item in bullet_rewrites:
+        original = item["original_text"]
+        if original in seen:
+            continue
+        seen.add(original)
+        deduped.append(item)
+    return deduped
+
+
+def dedupe_skill_gaps(skill_gaps: list[dict]) -> list[dict]:
+    """Drop skill gaps that repeat a skill name already seen earlier in
+    the list, for the same reason as dedupe_bullet_rewrites() — every
+    skill-gap widget is keyed off gap['skill'] directly, and a duplicate
+    skill name collides on that key."""
+    seen = set()
+    deduped = []
+    for gap in skill_gaps:
+        skill = gap["skill"]
+        if skill in seen:
+            continue
+        seen.add(skill)
+        deduped.append(gap)
+    return deduped
+
+load_dotenv()
+
 st.set_page_config(page_title="Résumé fit checker", layout="wide")
-
-load_dotenv(override=True)
-
 if st.session_state.get("pending_scroll"):
     st.session_state.pending_scroll = False
     scroll_to_here(0, key="top")
-
 st.title("Résumé fit checker")
 st.caption("Upload your résumé, paste a job post, see exactly what to change")
-st.caption(f"Model: {os.getenv('MODEL')}")  # remove before presenting
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-def safe_call(label, fn, *args):
+
+def safe_call(label, fn, *args, **kwargs):
     """Run an LLM-calling function, surfacing the real error in the UI."""
     try:
-        return fn(*args)
+        return fn(*args, **kwargs)
     except Exception as e:
         st.error(f"{label} failed: {e}")
         st.code(traceback.format_exc())
         st.stop()
+
+
+def run_assistant_analysis(resume_text: str, jd_text: str, label: str, on_step=None) -> dict:
+    """Run SKILL_GAPS_PROMPT and BULLET_REWRITES_PROMPT (two separate,
+    focused LLM calls — see prompts.py's module docstring for why this
+    replaced one combined ASSISTANT_PROMPT call) and merge their results
+    into the {"skill_gaps": [...], "bullet_rewrites": [...]} shape the
+    rest of the app expects, with duplicates dropped from each list.
+
+    If given, on_step() is called right before each of the two LLM
+    calls, so a caller driving a shared progress overlay (see
+    start_progress_overlay()) can advance it between them."""
+    user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
+
+    if on_step:
+        on_step("skill_gaps")
+    skill_gaps_result = safe_call(
+        f"{label} (skill gaps)", ask_json, SKILL_GAPS_PROMPT, user_msg
+    )
+
+    if on_step:
+        on_step("bullet_rewrites")
+    bullet_rewrites_result = safe_call(
+        f"{label} (bullet rewrites)", ask_json, BULLET_REWRITES_PROMPT, user_msg
+    )
+
+    return {
+        "skill_gaps": dedupe_skill_gaps(skill_gaps_result["skill_gaps"]),
+        "bullet_rewrites": dedupe_bullet_rewrites(bullet_rewrites_result["bullet_rewrites"]),
+    }
 
 
 def extract_docx_text(path: str) -> str:
@@ -94,115 +187,11 @@ def extract_docx_text(path: str) -> str:
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
 
-def bullet_key(text: str) -> str:
-    """Stable per-item widget key derived from the item's own text, so
-    widget state follows the item rather than its position in a list that
-    changes between rounds.
-    """
-    return hashlib.md5(text.encode()).hexdigest()[:8]
-
-
-PER_ITEM_KEY_PREFIXES = (
-    "choice_", "manual_", "feedback_", "regen_", "has_exp_", "exp_input_", "draft_",
-)
-
-
-def reset_suggestion_state():
-    """Clear per-item working state and the widget state backing it.
-
-    Called after a fresh analysis and after every apply-and-rescore round:
-    old entries are keyed by bullet text that may no longer exist verbatim
-    in the current document, and leftover widget state would otherwise
-    re-apply a stale choice to a newly suggested bullet.
-    """
-    st.session_state.current_suggestions = {}
-    st.session_state.current_reasons = {}
-    st.session_state.new_bullets = []
-    for k in [k for k in st.session_state.keys() if k.startswith(PER_ITEM_KEY_PREFIXES)]:
-        del st.session_state[k]
-
-
-def validate_rewrites(output: dict) -> tuple[list[dict], list[dict]]:
-    """Split rewrites into ones that look safe and ones to drop.
-
-    Checks content preservation rather than trusting the model's own
-    account of what it changed. Two failures observed in testing: a
-    rewrite that silently dropped "Aurora" and "security groups" from the
-    original, and one that invented "Dockerized" outright. Retention
-    catches the first, the introduced-term cap catches the second.
-
-    Thresholds are tunable — watch the dropped count in the UI and adjust.
-    """
-    FILLER = (
-        "demonstrating proficiency", "showcasing expertise",
-        "leveraging", "utilizing best practices", "best practices",
-        "highlighting experience", "ensuring efficient and secure",
-    )
-
-    def content_words(text: str) -> set[str]:
-        stop = {
-            "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "with",
-            "as", "at", "by", "from", "into", "using", "part", "project", "data",
-        }
-        return {
-            w.strip(".,()").lower()
-            for w in text.split()
-            if len(w.strip(".,()")) > 3 and w.strip(".,()").lower() not in stop
-        }
-
-    kept, dropped = [], []
-
-    for item in output.get("bullet_rewrites", []):
-        original = item.get("original_text", "")
-        suggested = item.get("suggested_text", "")
-
-        if not original or not suggested or suggested == original:
-            dropped.append(item)
-            continue
-
-        orig_words = content_words(original)
-        sugg_words = content_words(suggested)
-
-        retained = len(orig_words & sugg_words) / len(orig_words) if orig_words else 0
-        introduced = sugg_words - orig_words
-
-        keeps_content = retained >= 0.7
-        modest_addition = len(introduced) <= 3
-        filler_ok = not any(f in suggested.lower() for f in FILLER)
-
-        if keeps_content and modest_addition and filler_ok:
-            kept.append(item)
-        else:
-            dropped.append(item)
-
-    return kept, dropped
-
-
-def run_assistant_analysis(resume_text: str, jd_text: str) -> dict:
-    """Call ASSISTANT_PROMPT and filter its rewrites through
-    validate_rewrites. Records the dropped count so the UI can show it.
-    """
-    user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
-    raw_output = safe_call("Résumé analysis", ask_json, ASSISTANT_PROMPT, user_msg)
-    kept, dropped = validate_rewrites(raw_output)
-    raw_output["bullet_rewrites"] = kept
-    st.session_state.dropped_count = len(dropped)
-    return raw_output
-
-
 def collect_replacements() -> list[dict]:
-    """Build the replacement list by reading current widget state.
-
-    Single source of truth for what gets applied. Nothing is tracked
-    incrementally as the user clicks, so there is no parallel "accepted"
-    dict that can disagree with what the UI shows.
-    """
+    """Build the replacement list by reading current widget state, so there
+    is exactly one source of truth and no dict/widget drift."""
     replacements = []
-    output = st.session_state.assistant_output
-    if not output:
-        return replacements
-
-    for item in output["bullet_rewrites"]:
+    for item in st.session_state.assistant_output["bullet_rewrites"]:
         original = item["original_text"]
         bk = bullet_key(original)
         choice = st.session_state.get(f"choice_{bk}", "Skip")
@@ -216,22 +205,32 @@ def collect_replacements() -> list[dict]:
 
         if new_text and new_text != original:
             replacements.append({"original_text": original, "suggested_text": new_text})
-
     return replacements
 
+def reset_suggestion_state():
+    st.session_state.current_suggestions = {}
+    st.session_state.current_reasons = {}
+    st.session_state.drafted_gaps = set()
+    st.session_state.pending_drafts = {}
+    st.session_state.skill_gap_has_exp = {}
+    st.session_state.skill_gap_exp_input = {}
+    st.session_state.skill_gap_target = {}
+    for k in [k for k in st.session_state.keys()
+              if k.startswith(("choice_", "manual_", "feedback_", "regen_",
+                                "has_exp_", "exp_input_", "target_"))]:
+        del st.session_state[k]
 
-def show_overlay(message: str):
-    """Full-page dimmed overlay with a centered message. Call before a
-    long-running block, then call .empty() on the returned placeholder
-    once the block finishes.
-    """
+def render_overlay(placeholder, message: str, progress: int) -> None:
+    """(Re)render a full-page dimmed overlay with a spinner, a message,
+    and a progress bar into an EXISTING st.empty() placeholder — call
+    once per step of a multi-step operation so the same overlay updates
+    in place instead of flashing a new box per step. progress is 0-100."""
     theme_base = st.get_option("theme.base") or "light"
     if theme_base == "dark":
-        bg, text = "#1e1e1e", "#f0f0f0"
+        bg, text, track = "#1e1e1e", "#f0f0f0", "#3a3a3a"
     else:
-        bg, text = "#ffffff", "#111111"
+        bg, text, track = "#ffffff", "#111111", "#e2e5e9"
 
-    placeholder = st.empty()
     placeholder.markdown(
         f"""
         <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -239,11 +238,18 @@ def show_overlay(message: str):
                     display: flex; align-items: center; justify-content: center;">
             <div style="background: {bg}; color: {text};
                         padding: 24px 32px; border-radius: 12px; font-size: 15px;
-                        display: flex; align-items: center; gap: 12px;">
-                <div style="width: 18px; height: 18px; border: 2px solid {text};
-                            border-top-color: transparent; border-radius: 50%;
-                            animation: spin 0.8s linear infinite;"></div>
-                {message}
+                        min-width: 320px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
+                    <div style="width: 18px; height: 18px; border: 2px solid {text};
+                                border-top-color: transparent; border-radius: 50%;
+                                animation: spin 0.8s linear infinite; flex-shrink: 0;"></div>
+                    <div>{message}</div>
+                </div>
+                <div style="width: 100%; height: 6px; background: {track};
+                            border-radius: 3px; overflow: hidden;">
+                    <div style="width: {progress}%; height: 100%; background: #ff4b4b;
+                                border-radius: 3px; transition: width 0.3s ease;"></div>
+                </div>
             </div>
         </div>
         <style>
@@ -252,9 +258,64 @@ def show_overlay(message: str):
         """,
         unsafe_allow_html=True,
     )
-    return placeholder
 
 
+def start_progress_overlay(steps: list[str]):
+    """Show a full-page dimmed overlay that steps through `steps`, one at
+    a time, with a proportional progress bar. Returns (placeholder,
+    advance) — call advance(i) right before starting step i (0-indexed);
+    the bar reflects i / len(steps) steps already completed. Call
+    placeholder.empty() once the whole operation finishes."""
+    placeholder = st.empty()
+    total = len(steps)
+
+    def advance(i: int) -> None:
+        render_overlay(placeholder, steps[i], int(i / total * 100))
+
+    advance(0)
+    return placeholder, advance
+
+
+MAMMOTH_STYLE_MAP = """
+p[style-name='Title'] => h1.resume-name:fresh
+p[style-name='Subtitle'] => p.resume-contact:fresh
+"""
+
+RESUME_PREVIEW_CSS = """
+body { margin: 0; padding: 20px; background: #eef0f3; font-family: 'Segoe UI', Arial, sans-serif; }
+.page { background: #ffffff; max-width: 800px; margin: 0 auto; padding: 40px 48px;
+        border-radius: 4px; box-shadow: 0 2px 12px rgba(0,0,0,0.12); color: #1a1a1a; line-height: 1.5; }
+.page h1 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;
+           border-bottom: 2px solid #333; padding-bottom: 4px; margin: 20px 0 8px; }
+.page h1.resume-name { font-size: 26px; text-transform: none; letter-spacing: normal;
+                        border-bottom: none; margin-top: 0; }
+.page h2 { font-size: 14px; margin: 14px 0 2px; }
+.page p.resume-contact { color: #555; font-size: 13px; margin: 0 0 8px; }
+.page p { font-size: 13.5px; margin: 4px 0; }
+.page ul { margin: 4px 0 12px; padding-left: 20px; }
+.page li { font-size: 13.5px; margin-bottom: 3px; }
+.page strong { font-weight: 600; }
+.page a { color: #2563eb; }
+"""
+
+
+def render_resume_preview(docx_path: str, height: int = 900) -> None:
+    """Render a résumé .docx inline via mammoth's docx-to-HTML conversion,
+    so the user can see roughly how it looks without downloading it. This
+    is a semantic HTML approximation (headings/bold/bullets/paragraphs
+    mapped from Word styles) — not a pixel-perfect render of the original
+    Word layout, since that would require an external tool like LibreOffice.
+    Rendered inside a sandboxed iframe (components.html) so its CSS can't
+    leak into the rest of the page."""
+    with open(docx_path, "rb") as f:
+        result = mammoth.convert_to_html(f, style_map=MAMMOTH_STYLE_MAP)
+
+    components.html(
+        f"<html><head><style>{RESUME_PREVIEW_CSS}</style></head>"
+        f'<body><div class="page">{result.value}</div></body></html>',
+        height=height,
+        scrolling=True,
+    )
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
@@ -266,11 +327,16 @@ for key, default in [
     ("assistant_output", None),
     ("current_suggestions", {}),
     ("current_reasons", {}),
-    ("new_bullets", []),
+    ("drafted_gaps", set()),
+    ("pending_drafts", {}),
+    ("skill_gap_has_exp", {}),
+    ("skill_gap_exp_input", {}),
+    ("skill_gap_target", {}),
     ("edited_path", None),
     ("after_score", None),
     ("pending_scroll", False),
-    ("dropped_count", 0),
+    ("preview_expanded", False),
+    ("preview_key_version", 0),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -294,24 +360,30 @@ if run:
         st.error("Upload a résumé and paste a job description first.")
         st.stop()
 
-    overlay = show_overlay("Checking your fit against this role…")
+    overlay, advance = start_progress_overlay([
+        "Extracting required skills from the job description…",
+        "Scoring your résumé against the role…",
+        "Finding skill gaps…",
+        "Finding bullet rewrite opportunities…",
+    ])
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
         tmp.write(resume_file.getvalue())
         st.session_state.resume_path = tmp.name
 
     resume_text = extract_docx_text(st.session_state.resume_path)
-
     jd_skills = safe_call("JD skill extraction", ask_json, JD_SKILLS_PROMPT, jd_text)
     st.session_state.jd_skills = jd_skills
 
+    advance(1)
     st.session_state.before_score = compute_ats_score(
-        resume_text,
-        jd_skills["required_skills"],
-        jd_skills["preferred_skills"],
+        resume_text, jd_skills["required_skills"], jd_skills["preferred_skills"],
     )
 
-    st.session_state.assistant_output = run_assistant_analysis(resume_text, jd_text)
+    st.session_state.assistant_output = run_assistant_analysis(
+        resume_text, jd_text, "Résumé analysis",
+        on_step=lambda which: advance(2 if which == "skill_gaps" else 3),
+    )
 
     reset_suggestion_state()
     st.session_state.edited_path = None
@@ -343,20 +415,21 @@ if st.session_state.assistant_output:
     score_col3.metric("Missing skills", len((after or before)["missing_required"]))
 
     current = after if after else before
+    if current["found_required"]:
+        st.caption("Matched: " + ", ".join(current["found_required"]))
     if current["missing_required"]:
         label = "Still missing" if after else "Missing"
         st.caption(f"{label}: " + ", ".join(current["missing_required"]))
 
+    with st.expander(
+        "Preview résumé",
+        expanded=st.session_state.preview_expanded,
+        key=f"preview_expander_{st.session_state.preview_key_version}",
+    ):
+        render_resume_preview(st.session_state.resume_path)
+
     st.divider()
     st.subheader("Bullet suggestions")
-
-    if st.session_state.dropped_count:
-        st.caption(
-            f"{st.session_state.dropped_count} suggestion(s) filtered out for dropping or inventing content"
-        )
-
-    if not st.session_state.assistant_output["bullet_rewrites"]:
-        st.info("No terminology gaps found in your existing bullets. Nothing to rewrite.")
 
     for item in st.session_state.assistant_output["bullet_rewrites"]:
         original = item["original_text"]
@@ -393,9 +466,7 @@ if st.session_state.assistant_output:
                     if st.button("Regenerate", key=f"regen_{bk}") and feedback.strip():
                         with st.spinner("Regenerating..."):
                             result = safe_call(
-                                "Bullet regeneration",
-                                ask_json,
-                                REGENERATE_BULLET_PROMPT,
+                                "Bullet regeneration", ask_json, REGENERATE_BULLET_PROMPT,
                                 json.dumps({
                                     "original_text": suggested,
                                     "jd_text": jd_text,
@@ -416,33 +487,68 @@ if st.session_state.assistant_output:
                     placeholder="Type your replacement bullet here",
                 )
                 if not st.session_state.get(f"manual_{bk}", "").strip():
-                    st.caption("Enter your version above, or this bullet will be skipped.")
+                    st.caption("Enter your version above, or it will be skipped.")
 
     if st.session_state.assistant_output["skill_gaps"]:
         st.divider()
         st.subheader("Skill gaps")
 
+        _, gap_target_choices = gap_target_options(st.session_state.resume_path)
+
         for gap in st.session_state.assistant_output["skill_gaps"]:
-            gk = bullet_key(gap["skill"])
             with st.container(border=True):
                 st.write(f"**{gap['skill']}**")
                 st.caption(gap["why_it_matters"])
 
+                has_exp_key = f"has_exp_{gap['skill']}"
+                if has_exp_key not in st.session_state:
+                    # Streamlit drops a widget's session_state entry if it
+                    # isn't re-registered by the time a run ends — which
+                    # happens whenever st.rerun() fires from EARLIER in the
+                    # script (e.g. "Regenerate" in Bullet suggestions,
+                    # above this section) before this widget is reached.
+                    # Re-seed from our own backup dict, which we keep in
+                    # sync below and isn't subject to that widget lifecycle.
+                    st.session_state[has_exp_key] = st.session_state.skill_gap_has_exp.get(
+                        gap["skill"], "No"
+                    )
                 has_exp = st.radio(
                     "Do you have relevant experience?",
                     ["No", "Yes"],
-                    key=f"has_exp_{gk}",
+                    key=has_exp_key,
                     horizontal=True,
                     label_visibility="collapsed",
                 )
+                st.session_state.skill_gap_has_exp[gap["skill"]] = has_exp
+
                 if has_exp == "Yes":
+                    input_key = f"exp_input_{gap['skill']}"
+                    if gap["skill"] in st.session_state.pending_drafts:
+                        st.session_state[input_key] = st.session_state.pending_drafts.pop(gap["skill"])
+                    elif input_key not in st.session_state:
+                        st.session_state[input_key] = st.session_state.skill_gap_exp_input.get(
+                            gap["skill"], ""
+                        )
                     candidate_input = st.text_area(
                         "Briefly describe it",
-                        key=f"exp_input_{gk}",
+                        key=input_key,
                         label_visibility="collapsed",
                         placeholder=f"What did you do with {gap['skill']}?",
                     )
-                    if st.button("Draft a bullet", key=f"draft_{gk}"):
+                    st.session_state.skill_gap_exp_input[gap["skill"]] = candidate_input
+
+                    target_key = f"target_{gap['skill']}"
+                    if target_key not in st.session_state:
+                        saved_target = st.session_state.skill_gap_target.get(gap["skill"])
+                        if saved_target in gap_target_choices:
+                            st.session_state[target_key] = saved_target
+                    selected_target = st.selectbox(
+                        "Add this bullet to",
+                        gap_target_choices,
+                        key=target_key,
+                    )
+                    st.session_state.skill_gap_target[gap["skill"]] = selected_target
+                    if st.button("Draft a bullet", key=f"draft_{gap['skill']}"):
                         if candidate_input.strip():
                             with st.spinner("Drafting..."):
                                 result = safe_call(
@@ -456,74 +562,82 @@ if st.session_state.assistant_output:
                                     }),
                                 )
                             if result["new_bullet"]:
-                                st.session_state.new_bullets.append(result["new_bullet"])
-                                st.success(result["new_bullet"])
+                                st.session_state.drafted_gaps.add(gap["skill"])
+                                st.session_state.pending_drafts[gap["skill"]] = result["new_bullet"]
+                                st.rerun()
                             else:
                                 st.warning(result["note"])
-
-        if st.session_state.new_bullets:
-            st.caption(f"{len(st.session_state.new_bullets)} new bullet(s) queued to add")
 
     # -----------------------------------------------------------------------
     # Step 3: apply + rescore
     # -----------------------------------------------------------------------
 
     st.divider()
-
-    pending = collect_replacements()
-    st.caption(
-        f"{len(pending)} bullet change(s) and "
-        f"{len(st.session_state.new_bullets)} new bullet(s) ready to apply"
-    )
-
     apply_col, download_col = st.columns(2)
-    st.write(st.session_state.jd_skills)
+
     with apply_col:
         if st.button("Apply changes and rescore", type="primary", use_container_width=True):
+            overlay, advance = start_progress_overlay([
+                "Applying your changes to the résumé…",
+                "Rescoring your résumé…",
+                "Finding skill gaps…",
+                "Finding bullet rewrite opportunities…",
+            ])
+
             replacements = collect_replacements()
 
-            if not replacements and not st.session_state.new_bullets:
-                st.warning("Nothing selected to apply. Pick a suggestion or write your own first.")
-            else:
-                overlay = show_overlay("Applying changes and rescoring…")
+            out_path = str(Path(tempfile.gettempdir()) / "resume_edited.docx")
 
-                out_path = str(Path(tempfile.gettempdir()) / "resume_edited.docx")
+            entries, target_choices = gap_target_options(st.session_state.resume_path)
+            new_section_bullets = []
+            entry_bullets: dict[int, list[str]] = {}
+            for skill in st.session_state.drafted_gaps:
+                text = st.session_state.skill_gap_exp_input.get(skill, "").strip()
+                if not text:
+                    continue
+                choice = st.session_state.skill_gap_target.get(skill, NEW_SECTION_OPTION)
+                try:
+                    choice_idx = target_choices.index(choice)
+                except ValueError:
+                    choice_idx = 0
+                if choice_idx == 0:
+                    new_section_bullets.append(text)
+                else:
+                    anchor_index = entries[choice_idx - 1]["anchor_index"]
+                    entry_bullets.setdefault(anchor_index, []).append(text)
 
-                result = replace_bullets(st.session_state.resume_path, out_path, replacements)
-                if st.session_state.new_bullets:
-                    append_new_section(out_path, out_path, st.session_state.new_bullets)
+            result = replace_bullets(st.session_state.resume_path, out_path, replacements)
+            if entry_bullets:
+                insert_bullets_into_entries(out_path, out_path, entry_bullets)
+            if new_section_bullets:
+                append_new_section(out_path, out_path, new_section_bullets)
 
-                if result["not_found"]:
-                    st.warning(
-                        f"{len(result['not_found'])} change(s) couldn't be located in the document "
-                        "and were skipped."
-                    )
+            if result["not_found"]:
+                st.warning(f"{len(result['not_found'])} suggestion(s) couldn't be located and were skipped.")
 
-                st.session_state.edited_path = out_path
-                edited_text = extract_docx_text(out_path)
+            st.session_state.edited_path = out_path
+            edited_text = extract_docx_text(out_path)
 
-                st.session_state.after_score = compute_ats_score(
-                    edited_text,
-                    st.session_state.jd_skills["required_skills"],
-                    st.session_state.jd_skills["preferred_skills"],
-                )
+            advance(1)
+            st.session_state.after_score = compute_ats_score(
+                edited_text,
+                st.session_state.jd_skills["required_skills"],
+                st.session_state.jd_skills["preferred_skills"],
+            )
 
-                delta = (
-                    st.session_state.after_score["score"]
-                    - st.session_state.before_score["score"]
-                )
-                if delta > 0:
-                    st.toast(f"Score improved by {delta} points", icon="🎉")
- 
+            st.session_state.assistant_output = run_assistant_analysis(
+                edited_text, jd_text, "Résumé re-analysis",
+                on_step=lambda which: advance(2 if which == "skill_gaps" else 3),
+            )
 
-                st.session_state.assistant_output = run_assistant_analysis(edited_text, jd_text)
+            st.session_state.resume_path = out_path
+            reset_suggestion_state()
 
-                st.session_state.resume_path = out_path
-                reset_suggestion_state()
-
-                overlay.empty()
-                st.session_state.pending_scroll = True
-                st.rerun()
+            overlay.empty()
+            st.session_state.pending_scroll = True
+            st.session_state.preview_expanded = True
+            st.session_state.preview_key_version += 1
+            st.rerun()
 
     with download_col:
         if st.session_state.edited_path:
