@@ -124,14 +124,24 @@ candidate's credibility if they use it.
 specific JD required_skill or preferred_skill term (or a very close \
 variant) to newly appear in the bullet's text, where it was genuinely \
 implied but not literally present before.
+- Once a bullet qualifies for a rewrite, surface EVERY missing JD term \
+it genuinely, defensibly implies — not just the first one you find. A \
+bullet already describing work with a specific database, for example, \
+also genuinely implies querying it; if the JD separately lists both the \
+database technology and something like "SQL queries" as missing terms, \
+a rewrite that names the database but leaves the querying term out is \
+an incomplete rewrite. Apply the same genuine-connection test from the \
+constraint above to each additional term individually — stack terms \
+that each pass it on their own, never one to justify another.
 - "original_text" must be copied VERBATIM from the résumé text, \
 character-for-character — it is used as a find-and-replace anchor.
 - "suggested_text" must preserve the same underlying claim, technology, \
 and outcome as the original. Do not invent metrics, technologies, \
 architectural claims (e.g. microservices, distributed systems, CI/CD \
 pipelines), or outcomes not stated or clearly implied in the original.
-- "reason" must name the specific JD term the rewrite newly surfaces, \
-and briefly state what in the original bullet already implies it.
+- "reason" must name every specific JD term the rewrite newly surfaces \
+(there may be more than one — see above), and briefly state what in the \
+original bullet already implies each.
 - It is common and expected for "bullet_rewrites" to be an empty array, \
 including when the résumé has already been through a prior edit round. \
 Returning an empty array when no genuine opportunity exists is a correct \
