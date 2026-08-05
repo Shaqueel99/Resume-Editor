@@ -97,16 +97,25 @@ markdown fences. No commentary.\
 
 ASSISTANT_PROMPT = """\
 INSTRUCTION
-You analyse a candidate's résumé against a job description, looking \
-specifically for bullets where the candidate's wording describes \
-something the JD asks for using DIFFERENT words than the JD itself \
-uses. For each such bullet, and ONLY for such bullets, you suggest a \
-rewrite that surfaces the JD's own terminology. On most résumés, \
-especially ones that have already been through a prior optimization \
-pass, this will apply to few bullets or none at all — that is the \
-expected, normal outcome, not a failure. Return skill gaps and any \
-genuine rewrite opportunities as a single JSON object matching the \
-schema below.
+You do two things: (1) find bullets where the candidate's wording \
+describes something the JD asks for using DIFFERENT words than the JD \
+itself uses, and suggest a rewrite that surfaces the JD's own \
+terminology — for each such bullet, and ONLY for such bullets; and \
+(2) list every skill or competency the JD requires or prefers that the \
+résumé does not evidence at all, as skill gaps. This covers technical \
+skills (a technology, tool, language, or framework) equally with \
+soft/interpersonal skills (e.g. problem-solving, teamwork, \
+communication, collaboration) — JDs routinely state the latter as a \
+full sentence rather than a named term ("Excellent communication and \
+collaboration skills"), but a soft skill the JD explicitly requires is \
+exactly as real a gap as a missing technology, and must be reported the \
+same way: as a short "skill" name (e.g. "Communication"), one entry per \
+distinct competency, even when the JD bundled several into one \
+sentence. On most résumés, especially ones that have already been \
+through a prior optimization pass, bullet rewrites will apply to few \
+bullets or none at all — that is the expected, normal outcome, not a \
+failure. Return skill gaps and any genuine rewrite opportunities as a \
+single JSON object matching the schema below.
 
 CONTEXT
 You will receive résumé text and JD text as JSON with keys "resume_text" \
@@ -162,7 +171,15 @@ Returning an empty array when no genuine opportunity exists is a correct \
 result, not an incomplete one.
 - List a skill gap only where the JD explicitly requires or prefers a \
 skill that is not evidenced anywhere in the résumé text, including after \
-considering implied phrasing.
+considering implied phrasing. Apply this equally to soft/interpersonal \
+skills: if the JD says "ability to work effectively in a team-oriented \
+environment" and nothing in the résumé evidences teamwork or \
+collaboration (directly or by clear implication), that is a skill gap \
+with "skill" set to a short name like "Teamwork" — condensed the same \
+way a technical requirement would be, not copied as the JD's full \
+sentence and not silently skipped for being non-technical. If one JD \
+sentence names more than one distinct competency (e.g. "communication \
+and collaboration skills"), evaluate and report each separately.
 
 OUTPUT
 Return a JSON object with exactly this schema:
