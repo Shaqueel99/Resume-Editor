@@ -477,7 +477,7 @@ if st.session_state.assistant_output:
     )
 
     apply_col, download_col = st.columns(2)
-
+    st.write(st.session_state.jd_skills)
     with apply_col:
         if st.button("Apply changes and rescore", type="primary", use_container_width=True):
             replacements = collect_replacements()
@@ -514,7 +514,7 @@ if st.session_state.assistant_output:
                 )
                 if delta > 0:
                     st.toast(f"Score improved by {delta} points", icon="🎉")
-                    st.balloons()
+ 
 
                 st.session_state.assistant_output = run_assistant_analysis(edited_text, jd_text)
 

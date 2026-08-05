@@ -2,34 +2,33 @@
 
 System prompts for the Résumé ATS Optimizer.
 
-Four LLM calls:
-  1. JD_SKILLS_PROMPT         — extracts required/preferred skills from a
-                                 JD. Used to drive a deterministic,
-                                 rule-based ATS score (see scoring.py),
-                                 computed before and after edits with zero
-                                 LLM involvement — the score is never
-                                 self-graded by the model that wrote the
-                                 rewrites.
-  2. ASSISTANT_PROMPT          — generates skill gap commentary and
-                                 verbatim-anchored bullet rewrite
-                                 suggestions, one JD term per rewrite,
-                                 each backed by a quoted evidence_quote.
-                                 app.py's validate_rewrites() re-checks
-                                 evidence_quote and jd_term novelty in
-                                 code before anything is shown to the
-                                 user — the model has repeatedly claimed
-                                 a connection in "reason" that isn't
-                                 actually supported, so this is verified
-                                 rather than trusted.
-  3. REGENERATE_BULLET_PROMPT  — regenerates a single bullet on request,
-                                 honoring specific user feedback, for the
-                                 follow-up refinement step.
-  4. DRAFT_NEW_BULLET_PROMPT   — turns the candidate's own account of
-                                 unlisted experience into a new bullet,
-                                 for a skill gap the résumé doesn't cover
-                                 at all.
+Three LLM calls:
+  1. JD_SKILLS_PROMPT        — extracts required/preferred skills from a
+                                JD as short, matchable terms. Used to
+                                drive a deterministic, rule-based ATS
+                                score (see scoring.py), computed before
+                                and after edits with zero LLM
+                                involvement — the score is never
+                                self-graded by the model that wrote the
+                                rewrites.
+  2. ASSISTANT_PROMPT         — generates skill gap commentary and
+                                verbatim-anchored bullet rewrite
+                                suggestions, in one JSON response.
+                                app.py's validate_rewrites() re-checks
+                                content preservation in code before
+                                anything is shown to the user, since the
+                                model has repeatedly dropped real content
+                                or invented unsupported terms.
+  3. REGENERATE_BULLET_PROMPT — regenerates a single bullet on request,
+                                honoring specific user feedback, for the
+                                follow-up refinement step.
+  4. DRAFT_NEW_BULLET_PROMPT  — turns the candidate's own account of
+                                unlisted experience into a new bullet
+                                for a skill gap, naming the skill itself
+                                so the new bullet actually moves the
+                                score.
 
-All four follow ICCO structure (Instruction -> Context -> Constraints ->
+All follow ICCO structure (Instruction -> Context -> Constraints ->
 Output). No placeholders — dynamic content (résumé text, JD text,
 feedback) is passed as the user message in llm.py's ask_json().
 """
@@ -62,6 +61,21 @@ mentioned.
 skill, tool, language, or framework — e.g. "React.js", "AWS RDS", \
 "Spring Boot", "MySQL". Do not return full sentences or bullet-length \
 phrases.
+- Strip generic wrapper words that are not part of the skill's own name. \
+If the JD text reads "Java Spring Boot framework", the skill name is \
+"Spring Boot" — extract "Spring Boot", not "Java Spring Boot framework". \
+If the JD text reads "Linux environment setup", the skill name is \
+"Linux" — extract "Linux", not "Linux environment setup". Words like \
+"framework", "environment", "setup", "technologies", or "platform" are \
+wrapper words UNLESS they are genuinely part of the proper name itself \
+(e.g. "microservices architecture", ".NET Framework", "Spring \
+Framework" are real names and should be kept whole).
+- Preserve the JD's own wording CHOICE for the core skill name — if the \
+JD says "React.js", output "React.js", not "React"; if it says "Spring \
+Boot", output "Spring Boot", not "SpringBoot". This rule is about not \
+swapping in a different synonym for the skill itself. It does NOT mean \
+keeping generic wrapper words the JD used around the skill name — see \
+the rule above.
 - Classify a skill as "required" only if the JD's own language marks it \
 as mandatory (e.g. "must have", "required", listed under a \
 "Requirements" heading). Classify as "preferred" if the JD marks it as \
@@ -75,8 +89,6 @@ near-duplicates (e.g. "JS" and "JavaScript" — pick the JD's own wording \
 once).
 - If either array would be empty, return an empty array [] rather than \
 omitting the field or guessing content.
-- Preserve the JD's own terminology for each skill; do not substitute \
-synonyms or expand abbreviations.
 
 OUTPUT
 Return a JSON object with exactly this schema:
@@ -183,9 +195,8 @@ refinement turn, not a first draft.
 CONSTRAINTS
 - The new version must preserve the same underlying claim as \
 "original_text" — do not invent metrics, technologies, tools, \
-architectural claims (e.g. microservices, distributed systems, CI/CD \
-pipelines), or outcomes that were not stated or clearly implied in the \
-original bullet.
+architectural claims (e.g. microservices, distributed systems), or \
+outcomes that were not stated or clearly implied in the original bullet.
 - Follow the user's feedback as the primary instruction for HOW to \
 change the bullet. If the feedback conflicts with the no-invention rule \
 above (e.g. asks you to add a metric or technology that was never \
@@ -236,6 +247,14 @@ CONSTRAINTS
 - Every technology, tool, action, and outcome in the new bullet must \
 come directly from "candidate_input". Do not add any fact, number, \
 technology, or outcome that the candidate did not state.
+- The bullet MUST contain the "skill" value literally, or a very close \
+variant of it, since the whole purpose of this bullet is to evidence \
+that specific skill for keyword matching. If "candidate_input" describes \
+experience with the skill but never names it explicitly, you may name it \
+— that is labelling the experience the candidate described, not \
+inventing a fact. If "candidate_input" does NOT actually describe \
+experience with that skill at all, do not name it anyway — instead \
+return an empty "new_bullet" and say so in "note".
 - If "candidate_input" is too vague or short to support a concrete \
 bullet (e.g. just "yes" or "a little"), do not invent detail to fill the \
 gap — instead return an empty "new_bullet" and explain in "note" that \
