@@ -121,9 +121,10 @@ def collect_replacements() -> list[dict]:
 def reset_suggestion_state():
     st.session_state.current_suggestions = {}
     st.session_state.current_reasons = {}
-    st.session_state.new_bullets = []
+    st.session_state.drafted_gaps = set()
     for k in [k for k in st.session_state.keys()
-              if k.startswith(("choice_", "manual_", "feedback_", "regen_"))]:
+              if k.startswith(("choice_", "manual_", "feedback_", "regen_",
+                                "has_exp_", "exp_input_"))]:
         del st.session_state[k]
 
 def show_overlay(message: str):
@@ -171,7 +172,7 @@ for key, default in [
     ("current_reasons", {}),
     ("accepted_rewrites", {}),
     ("accepted_reasons", {}),
-    ("new_bullets", []),
+    ("drafted_gaps", set()),
     ("edited_path", None),
     ("after_score", None),
     ("pending_scroll", False),
@@ -329,9 +330,10 @@ if st.session_state.assistant_output:
                     label_visibility="collapsed",
                 )
                 if has_exp == "Yes":
+                    input_key = f"exp_input_{gap['skill']}"
                     candidate_input = st.text_area(
                         "Briefly describe it",
-                        key=f"exp_input_{gap['skill']}",
+                        key=input_key,
                         label_visibility="collapsed",
                         placeholder=f"What did you do with {gap['skill']}?",
                     )
@@ -349,8 +351,9 @@ if st.session_state.assistant_output:
                                     }),
                                 )
                             if result["new_bullet"]:
-                                st.session_state.new_bullets.append(result["new_bullet"])
-                                st.success(result["new_bullet"])
+                                st.session_state.drafted_gaps.add(gap["skill"])
+                                st.session_state[input_key] = result["new_bullet"]
+                                st.rerun()
                             else:
                                 st.warning(result["note"])
 
@@ -372,9 +375,14 @@ if st.session_state.assistant_output:
 
             out_path = str(Path(tempfile.gettempdir()) / "resume_edited.docx")
 
+            new_bullets = [
+                text for skill in st.session_state.drafted_gaps
+                if (text := st.session_state.get(f"exp_input_{skill}", "").strip())
+            ]
+
             result = replace_bullets(st.session_state.resume_path, out_path, replacements)
-            if st.session_state.new_bullets:
-                append_new_section(out_path, out_path, st.session_state.new_bullets)
+            if new_bullets:
+                append_new_section(out_path, out_path, new_bullets)
 
             if result["not_found"]:
                 st.warning(f"{len(result['not_found'])} suggestion(s) couldn't be located and were skipped.")
