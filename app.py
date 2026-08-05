@@ -415,6 +415,8 @@ if st.session_state.assistant_output:
     score_col3.metric("Missing skills", len((after or before)["missing_required"]))
 
     current = after if after else before
+    if current["found_required"]:
+        st.caption("Matched: " + ", ".join(current["found_required"]))
     if current["missing_required"]:
         label = "Still missing" if after else "Missing"
         st.caption(f"{label}: " + ", ".join(current["missing_required"]))
