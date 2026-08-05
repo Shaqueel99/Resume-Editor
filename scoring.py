@@ -12,11 +12,15 @@ only meaningful if scoring is independent of generation.
 Matching is done on normalized text (see _normalize) rather than raw
 substrings, so minor wording variants like "React.js" vs "React" still
 match — without needing an LLM judgment call in the scoring path itself.
-A skill phrase is considered present if all of its words appear close
-together in the résumé (see _is_present), not only if the exact phrase
-appears verbatim in the JD's own word order — a résumé bullet phrased
-as "Set up Linux environment" should still count for a JD skill listed
-as "Linux environment setup".
+A skill phrase is considered present if all of its words appear
+together within a single résumé line (see _is_present), not only if the
+exact phrase appears verbatim in the JD's own word order — a résumé
+bullet phrased as "Set up and maintained the Linux environment" should
+still count for a JD skill listed as "Linux environment setup". Résumé
+text is expected one paragraph/bullet per line (this is how
+app.py's extract_docx_text() builds it) — that line is the natural unit
+for "these words describe the same claim," which is both more accurate
+and simpler than picking a word-count window to approximate it.
 """
 
 import re
@@ -56,29 +60,30 @@ def compute_ats_score(resume_text: str, required_skills: list[str], preferred_sk
         so the UI still shows the JD's own wording to the user.
     """
     preferred_skills = preferred_skills or []
-    resume_words = _normalize(resume_text).split()
+    # One word-set per résumé line, so a skill's words only need to share
+    # a line (one bullet/paragraph = one claim) rather than fall within an
+    # arbitrary word-count window — robust to filler words of any length
+    # ("Set up AND MAINTAINED THE Linux environment...").
+    line_word_sets = [
+        set(_normalize(line).split())
+        for line in resume_text.splitlines()
+        if line.strip()
+    ]
 
     def _is_present(skill: str) -> bool:
         """A skill is present if all of its words occur together within a
-        small window of résumé text, in any order — not only if the exact
-        phrase appears verbatim. Real bullets often phrase a skill as a
-        verb ("Set up Linux environment") where the JD lists it as a noun
+        single résumé line, in any order — not only if the exact phrase
+        appears verbatim. Real bullets often phrase a skill as a verb
+        ("Set up Linux environment") where the JD lists it as a noun
         phrase ("Linux environment setup"); requiring the JD's own word
-        order would wrongly mark those as missing. The window (skill
-        length + 2) allows a couple of interleaving words — e.g. "Set up
-        Linux environment FOR TESTING" — without matching skill words that
-        are merely scattered, unrelated, across the whole résumé."""
+        order would wrongly mark those as missing. Bounding the match to
+        one line keeps it from matching skill words that are merely
+        scattered, unrelated, across different bullets."""
         skill_words = _normalize(skill).split()
         if not skill_words:
             return False
         skill_set = set(skill_words)
-        window_size = min(len(resume_words), len(skill_words) + 2)
-        if window_size < len(skill_words):
-            return False
-        return any(
-            skill_set <= set(resume_words[i:i + window_size])
-            for i in range(len(resume_words) - window_size + 1)
-        )
+        return any(skill_set <= line_words for line_words in line_word_sets)
 
     found_required = [s for s in required_skills if _is_present(s)]
     missing_required = [s for s in required_skills if not _is_present(s)]
