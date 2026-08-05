@@ -97,70 +97,41 @@ markdown fences. No commentary.\
 
 ASSISTANT_PROMPT = """\
 INSTRUCTION
-You do two things: (1) for bullets where the candidate's wording \
-describes something the JD asks for using DIFFERENT words than the JD \
-itself uses, suggest a rewrite that surfaces the JD's own terminology \
-— only for such bullets; and (2) list every skill or competency, \
-technical or soft/interpersonal, that the JD requires or prefers and \
-the résumé does not evidence at all, as skill gaps. On most résumés, \
-especially ones that have already been through a prior optimization \
-pass, bullet rewrites will apply to few bullets or none at all — that \
-is the expected, normal outcome, not a failure. Return skill gaps and \
-any genuine rewrite opportunities as a single JSON object matching the \
-schema below.
+From the given résumé and JD text, do two things: (1) for bullets that \
+already say something the JD asks for but in different words, suggest \
+a rewrite surfacing the JD's own term — only for genuine matches; \
+(2) list every required/preferred skill or competency, technical or \
+soft, that the résumé doesn't evidence, as skill gaps. Empty or \
+near-empty results are normal and expected, not a failure. Return one \
+JSON object per the schema below.
 
 CONTEXT
-You will receive résumé text and JD text as JSON with keys "resume_text" \
-and "jd_text". This tool's value is narrow and specific: it is NOT a \
-general résumé-improvement tool, and it does not rewrite bullets for \
-tone, concision, or persuasiveness. Its only job is terminology \
-alignment — finding a genuine wording mismatch between what the résumé \
-says and what the JD calls the same thing. The résumé you receive may \
-already be the product of a previous round of edits, so most or all of \
-its bullets may already use the JD's terminology, or may simply have no \
-connection to any missing JD term at all. Producing a rewrite for a \
-bullet that has no real, defensible connection to a missing JD term — \
-just to have an answer — is a worse outcome than returning no \
-suggestion for that bullet.
+Input is JSON: {"resume_text", "jd_text"}. Scope is narrow: \
+terminology alignment only, never rewriting for tone or style, and \
+never inventing a connection just to produce an answer — an \
+already-edited résumé may genuinely have few or no rewrites left.
 
 CONSTRAINTS
-- Before suggesting a rewrite for a bullet, ask: "does this bullet's \
-CURRENT wording already contain the JD term I would be surfacing, or \
-does the bullet have NO genuine, defensible connection to any missing \
-JD term?" In either case, do not suggest a rewrite for that bullet.
-- A genuine connection means the bullet already describes the same \
-underlying action, tool, or concept the JD term refers to — not merely a \
-loose thematic association. "Deployment workflows" does not genuinely \
-imply "CI/CD" unless the bullet actually describes an automated \
-build/test/release pipeline. When in doubt, do not suggest — a missed \
-opportunity costs nothing; a fabricated connection damages the \
-candidate's credibility if they use it.
-- Only suggest a rewrite for a bullet if doing so causes at least one \
-specific JD required_skill or preferred_skill term (or a very close \
-variant) to newly appear in the bullet's text, where it was genuinely \
-implied but not literally present before.
-- Once a bullet qualifies for a rewrite, surface every other missing JD \
-term it also genuinely implies, not just the first one — applying the \
-same genuine-connection test to each additional term individually, \
-never using one term to justify a fabricated connection to another.
-- "original_text" must be copied VERBATIM from the résumé text, \
-character-for-character — it is used as a find-and-replace anchor.
-- "suggested_text" must preserve the same underlying claim, technology, \
-and outcome as the original. Do not invent metrics, technologies, \
-architectural claims (e.g. microservices, distributed systems, CI/CD \
-pipelines), or outcomes not stated or clearly implied in the original.
-- "reason" must name every JD term the rewrite surfaces (there may be \
-more than one) and briefly state what implies each.
-- It is common and expected for "bullet_rewrites" to be an empty array, \
-including when the résumé has already been through a prior edit round. \
-Returning an empty array when no genuine opportunity exists is a correct \
-result, not an incomplete one.
-- List a skill gap only where the JD explicitly requires or prefers a \
-skill not evidenced anywhere in the résumé, including by implication. \
-This applies equally to soft skills (e.g. teamwork, communication) even \
-when the JD states them as a sentence rather than a term — condense to \
-a short "skill" name (e.g. "Teamwork"), one entry per distinct \
-competency named in that sentence.
+- Rewrite a bullet ONLY if it does NOT already contain the JD term, AND \
+it has a genuine, defensible connection to that term — describes the \
+same real action/tool/concept, not just a loose thematic link (e.g. \
+"deployment workflows" ≠ "CI/CD" unless an actual build/test/release \
+pipeline is described). Skip it when in doubt.
+- The rewrite must cause at least one specific missing required/\
+preferred JD term to newly, genuinely appear. Once a bullet qualifies, \
+also surface any OTHER missing term it independently, genuinely \
+implies — never stack a term that fails the connection test on its own.
+- "original_text": copied VERBATIM, character-for-character (used as a \
+find/replace anchor).
+- "suggested_text": same underlying claim, technology, and outcome as \
+the original — no invented metrics, technologies, or claims.
+- "reason": name every term the rewrite surfaces and briefly state what \
+implies each.
+- "bullet_rewrites": [] is a common, correct result.
+- "skill_gaps": every required/preferred skill — technical or soft \
+(teamwork, communication, etc.) — not evidenced in the résumé, even by \
+implication. Condense a soft-skill JD sentence to a short "skill" name \
+(e.g. "Teamwork"); one entry per distinct competency.
 
 OUTPUT
 Return a JSON object with exactly this schema:
