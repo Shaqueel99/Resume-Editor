@@ -78,9 +78,17 @@ skills, the JD's phrasing is usually a full sentence rather than a term \
 — condense it to the standard short name(s) for the competency it \
 describes (e.g. "ability to work effectively in a team-oriented \
 environment" -> "Teamwork", "excellent communication and collaboration \
-skills" -> "Communication" and "Collaboration"). If one JD sentence \
-names more than one distinct competency, extract each as its own entry \
-rather than combining them into one.
+skills" -> "Communication" and "Collaboration").
+- If a JD phrase bundles more than one distinct capability with "and" \
+or a comma, extract each as its own entry rather than one combined \
+phrase — this applies to technical requirements just as much as soft \
+skills. "Linux environment setup and administration" is two separate, \
+independently-evidenced capabilities ("Linux environment setup", \
+"Linux environment administration"), not one; a combined phrase would \
+only match a résumé that happens to use every one of those words \
+together, which is an unrealistically high bar. Keep the JD's own \
+wording for each split-out piece — split the bundle, don't paraphrase \
+the pieces.
 - Classify a skill as "required" only if the JD's own language marks it \
 as mandatory (e.g. "must have", "required", listed under a \
 "Requirements" heading). Classify as "preferred" if the JD marks it as \
@@ -137,6 +145,13 @@ automated build/test/release pipeline evidences "CI/CD" even without \
 using that exact term). If the résumé evidences it, do not list it.
 - "skill" must be a short noun phrase (1-4 words): the JD's own term \
 for a technical skill, or a condensed standard name for a soft skill.
+- If a JD requirement bundles more than one distinct capability with \
+"and" or a comma (e.g. "Linux environment setup and administration"), \
+evaluate and list each as its own gap rather than one combined phrase \
+— the résumé may evidence one half but not the other, and a combined \
+phrase would only count as evidenced if the résumé happened to use \
+every word together, which is an unrealistically high bar. This \
+applies to technical requirements just as much as soft skills.
 - "why_it_matters" must be specific to THIS résumé and THIS JD — name \
 what the JD requires and briefly confirm why it's genuinely absent \
 from the résumé's actual content, not a generic restatement of the \
