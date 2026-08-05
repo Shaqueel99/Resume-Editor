@@ -328,7 +328,7 @@ if st.session_state.assistant_output:
         label = "Still missing" if after else "Missing"
         st.caption(f"{label}: " + ", ".join(current["missing_required"]))
 
-    with st.expander("Preview résumé"):
+    with st.expander("Preview résumé", key="preview_expanded"):
         render_resume_preview(st.session_state.resume_path)
 
     st.divider()
@@ -509,6 +509,7 @@ if st.session_state.assistant_output:
 
             overlay.empty()
             st.session_state.pending_scroll = True
+            st.session_state.preview_expanded = True
             st.rerun()
 
     with download_col:
