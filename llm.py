@@ -221,9 +221,15 @@ def ask_json(
                     ),
                 })
                 continue
+            snippet = raw[max(0, exc.pos - 60): exc.pos + 120]
             raise RuntimeError(
-                f"LLM returned non-JSON after {attempt + 1} attempts. "
-                f"Raw (first 300 chars):\n{raw[:300]}"
+                f"LLM returned non-JSON after {attempt + 1} attempts.\n"
+                f"Parse error: {exc.msg} (line {exc.lineno}, col {exc.colno}, "
+                f"char {exc.pos} of {len(raw)}).\n"
+                f"finish_reason: {choice.finish_reason!r} "
+                f"(if 'length', the response was cut off by max_tokens).\n"
+                f"Near error position: ...{snippet!r}...\n"
+                f"Raw (first 500 chars):\n{raw[:500]}"
             )
 
         # Post-hoc anti-rewrite check on every returned JSON object.
