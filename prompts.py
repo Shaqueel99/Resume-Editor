@@ -97,25 +97,17 @@ markdown fences. No commentary.\
 
 ASSISTANT_PROMPT = """\
 INSTRUCTION
-You do two things: (1) find bullets where the candidate's wording \
+You do two things: (1) for bullets where the candidate's wording \
 describes something the JD asks for using DIFFERENT words than the JD \
-itself uses, and suggest a rewrite that surfaces the JD's own \
-terminology — for each such bullet, and ONLY for such bullets; and \
-(2) list every skill or competency the JD requires or prefers that the \
-résumé does not evidence at all, as skill gaps. This covers technical \
-skills (a technology, tool, language, or framework) equally with \
-soft/interpersonal skills (e.g. problem-solving, teamwork, \
-communication, collaboration) — JDs routinely state the latter as a \
-full sentence rather than a named term ("Excellent communication and \
-collaboration skills"), but a soft skill the JD explicitly requires is \
-exactly as real a gap as a missing technology, and must be reported the \
-same way: as a short "skill" name (e.g. "Communication"), one entry per \
-distinct competency, even when the JD bundled several into one \
-sentence. On most résumés, especially ones that have already been \
-through a prior optimization pass, bullet rewrites will apply to few \
-bullets or none at all — that is the expected, normal outcome, not a \
-failure. Return skill gaps and any genuine rewrite opportunities as a \
-single JSON object matching the schema below.
+itself uses, suggest a rewrite that surfaces the JD's own terminology \
+— only for such bullets; and (2) list every skill or competency, \
+technical or soft/interpersonal, that the JD requires or prefers and \
+the résumé does not evidence at all, as skill gaps. On most résumés, \
+especially ones that have already been through a prior optimization \
+pass, bullet rewrites will apply to few bullets or none at all — that \
+is the expected, normal outcome, not a failure. Return skill gaps and \
+any genuine rewrite opportunities as a single JSON object matching the \
+schema below.
 
 CONTEXT
 You will receive résumé text and JD text as JSON with keys "resume_text" \
@@ -147,39 +139,28 @@ candidate's credibility if they use it.
 specific JD required_skill or preferred_skill term (or a very close \
 variant) to newly appear in the bullet's text, where it was genuinely \
 implied but not literally present before.
-- Once a bullet qualifies for a rewrite, surface EVERY missing JD term \
-it genuinely, defensibly implies — not just the first one you find. A \
-bullet already describing work with a specific database, for example, \
-also genuinely implies querying it; if the JD separately lists both the \
-database technology and something like "SQL queries" as missing terms, \
-a rewrite that names the database but leaves the querying term out is \
-an incomplete rewrite. Apply the same genuine-connection test from the \
-constraint above to each additional term individually — stack terms \
-that each pass it on their own, never one to justify another.
+- Once a bullet qualifies for a rewrite, surface every other missing JD \
+term it also genuinely implies, not just the first one — applying the \
+same genuine-connection test to each additional term individually, \
+never using one term to justify a fabricated connection to another.
 - "original_text" must be copied VERBATIM from the résumé text, \
 character-for-character — it is used as a find-and-replace anchor.
 - "suggested_text" must preserve the same underlying claim, technology, \
 and outcome as the original. Do not invent metrics, technologies, \
 architectural claims (e.g. microservices, distributed systems, CI/CD \
 pipelines), or outcomes not stated or clearly implied in the original.
-- "reason" must name every specific JD term the rewrite newly surfaces \
-(there may be more than one — see above), and briefly state what in the \
-original bullet already implies each.
+- "reason" must name every JD term the rewrite surfaces (there may be \
+more than one) and briefly state what implies each.
 - It is common and expected for "bullet_rewrites" to be an empty array, \
 including when the résumé has already been through a prior edit round. \
 Returning an empty array when no genuine opportunity exists is a correct \
 result, not an incomplete one.
 - List a skill gap only where the JD explicitly requires or prefers a \
-skill that is not evidenced anywhere in the résumé text, including after \
-considering implied phrasing. Apply this equally to soft/interpersonal \
-skills: if the JD says "ability to work effectively in a team-oriented \
-environment" and nothing in the résumé evidences teamwork or \
-collaboration (directly or by clear implication), that is a skill gap \
-with "skill" set to a short name like "Teamwork" — condensed the same \
-way a technical requirement would be, not copied as the JD's full \
-sentence and not silently skipped for being non-technical. If one JD \
-sentence names more than one distinct competency (e.g. "communication \
-and collaboration skills"), evaluate and report each separately.
+skill not evidenced anywhere in the résumé, including by implication. \
+This applies equally to soft skills (e.g. teamwork, communication) even \
+when the JD states them as a sentence rather than a term — condense to \
+a short "skill" name (e.g. "Teamwork"), one entry per distinct \
+competency named in that sentence.
 
 OUTPUT
 Return a JSON object with exactly this schema:
