@@ -8,7 +8,31 @@ score itself is computed here with plain substring matching, so the
 same LLM that suggests bullet rewrites can never be the one grading
 whether those rewrites "worked." The before/after score comparison is
 only meaningful if scoring is independent of generation.
+
+Matching is done on normalized text (see _normalize) rather than raw
+substrings, so minor wording variants like "React" vs "React.js" still
+match — without needing an LLM judgment call in the scoring path itself.
 """
+
+import re
+
+
+def _normalize(text: str) -> str:
+    """Lowercase and strip punctuation/common suffixes so minor wording
+    variants compare equal (e.g. "React.js" and "React" both become
+    "reactjs" / "react" after suffix + punctuation stripping).
+
+    This is intentionally simple — it fixes common cosmetic mismatches
+    (periods, hyphens, ".js" suffixes) without attempting full synonym
+    matching (e.g. "JS" vs "JavaScript"), which would require language
+    understanding and therefore an LLM call, defeating the point of
+    keeping this function deterministic.
+    """
+    s = text.lower().strip()
+    s = re.sub(r'\.js\b', 'js', s)     # "react.js" -> "reactjs"
+    s = re.sub(r'[^\w\s]', '', s)       # strip remaining punctuation
+    s = re.sub(r'\s+', ' ', s).strip()  # collapse extra whitespace
+    return s
 
 
 def compute_ats_score(resume_text: str, required_skills: list[str], preferred_skills: list[str] | None = None) -> dict:
@@ -22,16 +46,21 @@ def compute_ats_score(resume_text: str, required_skills: list[str], preferred_sk
 
     Returns:
         A dict with the score (0-100) and which skills were found/missing,
-        so the UI can show exactly what changed between two calls.
+        so the UI can show exactly what changed between two calls. Found/
+        missing lists report the ORIGINAL skill strings (not normalized),
+        so the UI still shows the JD's own wording to the user.
     """
     preferred_skills = preferred_skills or []
-    resume_lower = resume_text.lower()
+    resume_normalized = _normalize(resume_text)
 
-    found_required = [s for s in required_skills if s.lower() in resume_lower]
-    missing_required = [s for s in required_skills if s.lower() not in resume_lower]
+    def _is_present(skill: str) -> bool:
+        return _normalize(skill) in resume_normalized
 
-    found_preferred = [s for s in preferred_skills if s.lower() in resume_lower]
-    missing_preferred = [s for s in preferred_skills if s.lower() not in resume_lower]
+    found_required = [s for s in required_skills if _is_present(s)]
+    missing_required = [s for s in required_skills if not _is_present(s)]
+
+    found_preferred = [s for s in preferred_skills if _is_present(s)]
+    missing_preferred = [s for s in preferred_skills if not _is_present(s)]
 
     score = (
         round(100 * len(found_required) / len(required_skills))
