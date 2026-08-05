@@ -8,19 +8,28 @@ Flow:
   3. compute_ats_score() scores the résumé as-is — deterministic, no LLM.
   4. ASSISTANT_PROMPT generates skill gaps + bullet rewrite suggestions
      that specifically surface JD terminology (LLM call 2).
-  5. User reviews suggestions in a working-draft state (current_suggestions)
-     and can regenerate a bullet with feedback any number of times before
-     explicitly accepting — regeneration feeds the CURRENT draft back in,
-     not the résumé's original text, so feedback compounds instead of
-     resetting. Nothing moves into accepted_rewrites until the user clicks
-     Accept.
+  5. User reviews suggestions in a working-draft state (current_suggestions
+     / current_reasons) and can regenerate a bullet with feedback any
+     number of times before explicitly accepting — regeneration feeds the
+     CURRENT draft back in, not the résumé's original text, so feedback
+     compounds instead of resetting. The displayed "reason" caption tracks
+     whichever version is showing (original suggestion, mid-regeneration
+     draft, or accepted). Nothing moves into accepted_rewrites until the
+     user clicks Accept.
   6. For skill gaps, user can optionally describe relevant experience;
      DRAFT_NEW_BULLET_PROMPT turns it into a new bullet for a new
      "Additional Skills / Experience" section.
   7. Accepted rewrites + new bullets are applied to the .docx via
      docx_editor.py.
-  8. compute_ats_score() re-runs on the edited text — same function,
-     no new LLM call — to show the after score.
+  8. "Apply and rescore": compute_ats_score() re-runs on the edited text,
+     against the SAME skill list used for "before", so the before/after
+     comparison stays trustworthy — this is deterministic and does not
+     call the LLM. Separately, ASSISTANT_PROMPT is re-run against the
+     edited résumé to refresh suggestions for another round of edits.
+     After this completes, results are hidden (show_results=False) so
+     the page renders short — just the upload box plus a "Show updated
+     results" button — instead of leaving the user scrolled down to
+     stale content with no way back to the top.
   9. Download button for the edited .docx.
 """
 
@@ -32,7 +41,7 @@ from pathlib import Path
 import streamlit as st
 from docx import Document
 from dotenv import load_dotenv
-
+from streamlit_scroll_to_top import scroll_to_here
 from llm import ask_json
 from prompts import (
     JD_SKILLS_PROMPT,
@@ -46,8 +55,13 @@ from docx_editor import replace_bullets, append_new_section
 load_dotenv()
 
 st.set_page_config(page_title="Résumé fit checker", layout="wide")
+if st.session_state.get("pending_scroll"):
+    st.session_state.pending_scroll = False
+    scroll_to_here(0, key="top")
 st.title("Résumé fit checker")
 st.caption("Upload your résumé, paste a job post, see exactly what to change")
+
+
 
 
 def safe_call(label, fn, *args):
@@ -66,6 +80,49 @@ def extract_docx_text(path: str) -> str:
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
 
+def reset_suggestion_state():
+    """Clear per-bullet working state. Called after a fresh analysis and
+    after every apply-and-rescore round, since old entries are keyed by
+    bullet text that may no longer exist verbatim in the current document.
+    """
+    st.session_state.current_suggestions = {}
+    st.session_state.current_reasons = {}
+    st.session_state.accepted_rewrites = {}
+    st.session_state.accepted_reasons = {}
+    st.session_state.new_bullets = []
+
+def show_overlay(message: str):
+    """Full-page dimmed overlay with a centered message. Call before a
+    long-running block, keep the returned placeholder open until the
+    block finishes, then call .empty() on it."""
+    theme_base = st.get_option("theme.base") or "light"
+    if theme_base == "dark":
+        bg, text = "#1e1e1e", "#f0f0f0"
+    else:
+        bg, text = "#ffffff", "#111111"
+
+    placeholder = st.empty()
+    placeholder.markdown(
+        f"""
+        <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background: rgba(0,0,0,0.5); z-index: 9999;
+                    display: flex; align-items: center; justify-content: center;">
+            <div style="background: {bg}; color: {text};
+                        padding: 24px 32px; border-radius: 12px; font-size: 15px;
+                        display: flex; align-items: center; gap: 12px;">
+                <div style="width: 18px; height: 18px; border: 2px solid {text};
+                            border-top-color: transparent; border-radius: 50%;
+                            animation: spin 0.8s linear infinite;"></div>
+                {message}
+            </div>
+        </div>
+        <style>
+            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    return placeholder
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
@@ -75,11 +132,14 @@ for key, default in [
     ("jd_skills", None),
     ("before_score", None),
     ("assistant_output", None),
-    ("current_suggestions", {}),   # original_text -> latest draft shown (pre-accept)
-    ("accepted_rewrites", {}),      # original_text -> explicitly accepted text
+    ("current_suggestions", {}),
+    ("current_reasons", {}),
+    ("accepted_rewrites", {}),
+    ("accepted_reasons", {}),
     ("new_bullets", []),
     ("edited_path", None),
     ("after_score", None),
+    ("pending_scroll", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -103,33 +163,32 @@ if run:
         st.error("Upload a résumé and paste a job description first.")
         st.stop()
 
+    overlay = show_overlay("Checking your fit against this role…")
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
         tmp.write(resume_file.getvalue())
         st.session_state.resume_path = tmp.name
 
     resume_text = extract_docx_text(st.session_state.resume_path)
-
-    with st.spinner("Reading the job post..."):
-        jd_skills = safe_call("JD skill extraction", ask_json, JD_SKILLS_PROMPT, jd_text)
-        st.session_state.jd_skills = jd_skills
+    jd_skills = safe_call("JD skill extraction", ask_json, JD_SKILLS_PROMPT, jd_text)
+    st.session_state.jd_skills = jd_skills
 
     st.session_state.before_score = compute_ats_score(
-        resume_text,
-        jd_skills["required_skills"],
-        jd_skills["preferred_skills"],
+        resume_text, jd_skills["required_skills"], jd_skills["preferred_skills"],
     )
 
-    with st.spinner("Comparing your résumé against the role..."):
-        user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
-        st.session_state.assistant_output = safe_call(
-            "Résumé analysis", ask_json, ASSISTANT_PROMPT, user_msg
-        )
+    user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
+    st.session_state.assistant_output = safe_call(
+        "Résumé analysis", ask_json, ASSISTANT_PROMPT, user_msg
+    )
 
-    st.session_state.current_suggestions = {}
-    st.session_state.accepted_rewrites = {}
-    st.session_state.new_bullets = []
+    reset_suggestion_state()
     st.session_state.edited_path = None
     st.session_state.after_score = None
+
+    overlay.empty()
+    st.session_state.pending_scroll = True
+    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -143,34 +202,43 @@ if st.session_state.assistant_output:
     st.divider()
     score_col1, score_col2, score_col3 = st.columns(3)
     score_col1.metric("Current match", f"{before['score']}/100")
-    score_col2.metric("After fixes", f"{after['score']}/100" if after else "—")
-    score_col3.metric("Missing skills", len(before["missing_required"]))
 
-    if before["missing_required"]:
-        st.caption("Missing: " + ", ".join(before["missing_required"]))
+    if after:
+        delta = after["score"] - before["score"]
+        score_col2.metric("After fixes", f"{after['score']}/100", delta=f"{delta:+d}")
+    else:
+        score_col2.metric("After fixes", "—")
+
+    score_col3.metric("Missing skills", len((after or before)["missing_required"]))
+
+    current = after if after else before
+    if current["missing_required"]:
+        label = "Still missing" if after else "Missing"
+        st.caption(f"{label}: " + ", ".join(current["missing_required"]))
 
     st.divider()
     st.subheader("Bullet suggestions")
 
     for i, item in enumerate(st.session_state.assistant_output["bullet_rewrites"]):
         original = item["original_text"]
+        is_accepted = original in st.session_state.accepted_rewrites
 
-        # Resolution order: accepted (locked in) > current draft (mid-regeneration) > first suggestion.
-        if original in st.session_state.accepted_rewrites:
+        if is_accepted:
             suggested = st.session_state.accepted_rewrites[original]
+            reason = st.session_state.accepted_reasons.get(original, item["reason"])
         elif original in st.session_state.current_suggestions:
             suggested = st.session_state.current_suggestions[original]
+            reason = st.session_state.current_reasons.get(original, item["reason"])
         else:
             suggested = item["suggested_text"]
-
-        is_accepted = original in st.session_state.accepted_rewrites
+            reason = item["reason"]
 
         with st.container(border=True):
             st.caption("original")
             st.write(original)
             st.caption("suggested")
             st.write(suggested)
-            st.caption(item["reason"])
+            st.caption(reason)
 
             btn_col, fb_col, regen_col = st.columns([1, 3, 1])
             with btn_col:
@@ -179,6 +247,7 @@ if st.session_state.assistant_output:
                 else:
                     if st.button("Accept", key=f"accept_{i}"):
                         st.session_state.accepted_rewrites[original] = suggested
+                        st.session_state.accepted_reasons[original] = reason
                         st.rerun()
             with fb_col:
                 feedback = st.text_input(
@@ -196,12 +265,13 @@ if st.session_state.assistant_output:
                             ask_json,
                             REGENERATE_BULLET_PROMPT,
                             json.dumps({
-                                "original_text": suggested,  # feed the CURRENT draft, not the résumé's original
+                                "original_text": suggested,
                                 "jd_text": jd_text,
                                 "feedback": feedback,
                             }),
                         )
                     st.session_state.current_suggestions[original] = result["new_text"]
+                    st.session_state.current_reasons[original] = result["reason"]
                     if result["note"]:
                         st.warning(result["note"])
                     st.rerun()
@@ -257,6 +327,8 @@ if st.session_state.assistant_output:
 
     with apply_col:
         if st.button("Apply changes and rescore", type="primary", use_container_width=True):
+            overlay = show_overlay("Applying changes and rescoring…")
+
             replacements = [
                 {"original_text": orig, "suggested_text": new}
                 for orig, new in st.session_state.accepted_rewrites.items()
@@ -264,21 +336,32 @@ if st.session_state.assistant_output:
 
             out_path = str(Path(tempfile.gettempdir()) / "resume_edited.docx")
 
-            with st.spinner("Applying edits..."):
-                result = replace_bullets(st.session_state.resume_path, out_path, replacements)
-                if st.session_state.new_bullets:
-                    append_new_section(out_path, out_path, st.session_state.new_bullets)
+            result = replace_bullets(st.session_state.resume_path, out_path, replacements)
+            if st.session_state.new_bullets:
+                append_new_section(out_path, out_path, st.session_state.new_bullets)
 
             if result["not_found"]:
                 st.warning(f"{len(result['not_found'])} suggestion(s) couldn't be located and were skipped.")
 
             st.session_state.edited_path = out_path
             edited_text = extract_docx_text(out_path)
+
             st.session_state.after_score = compute_ats_score(
                 edited_text,
                 st.session_state.jd_skills["required_skills"],
                 st.session_state.jd_skills["preferred_skills"],
             )
+
+            user_msg = json.dumps({"resume_text": edited_text, "jd_text": jd_text})
+            st.session_state.assistant_output = safe_call(
+                "Résumé re-analysis", ask_json, ASSISTANT_PROMPT, user_msg
+            )
+
+            st.session_state.resume_path = out_path
+            reset_suggestion_state()
+
+            overlay.empty()
+            st.session_state.pending_scroll = True
             st.rerun()
 
     with download_col:
