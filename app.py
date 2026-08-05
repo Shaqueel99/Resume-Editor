@@ -6,8 +6,14 @@ Flow:
   1. User uploads a .docx résumé and pastes a JD.
   2. JD_SKILLS_PROMPT extracts required/preferred skills (LLM call 1).
   3. compute_ats_score() scores the résumé as-is — deterministic, no LLM.
-  4. ASSISTANT_PROMPT generates skill gaps + bullet rewrite suggestions
-     that specifically surface JD terminology (LLM call 2).
+  4. SKILL_GAPS_PROMPT and BULLET_REWRITES_PROMPT each generate their own
+     half of what used to be one combined response — skill gaps (incl.
+     soft skills) and bullet rewrites that surface JD terminology,
+     respectively — merged into a single assistant_output dict (LLM
+     calls 2-3). Split into two focused calls because one call trying to
+     do both, and produce one large nested JSON object, made a
+     smaller/cheaper model's output both less reliable (prone to
+     stopping mid-JSON) and shallower when trimmed for reliability.
   5. User reviews suggestions in a working-draft state (current_suggestions
      / current_reasons) and can regenerate a bullet with feedback any
      number of times — regeneration feeds the CURRENT draft back in, not
@@ -28,8 +34,9 @@ Flow:
   8. "Apply and rescore": compute_ats_score() re-runs on the edited text,
      against the SAME skill list used for "before", so the before/after
      comparison stays trustworthy — this is deterministic and does not
-     call the LLM. Separately, ASSISTANT_PROMPT is re-run against the
-     edited résumé to refresh suggestions for another round of edits.
+     call the LLM. Separately, SKILL_GAPS_PROMPT and BULLET_REWRITES_PROMPT
+     are re-run against the edited résumé to refresh suggestions for
+     another round of edits.
   9. Download button for the edited .docx.
 
 Anywhere the score row is shown, a "Preview résumé" expander renders the
@@ -53,7 +60,8 @@ from streamlit_scroll_to_top import scroll_to_here
 from llm import ask_json
 from prompts import (
     JD_SKILLS_PROMPT,
-    ASSISTANT_PROMPT,
+    SKILL_GAPS_PROMPT,
+    BULLET_REWRITES_PROMPT,
     REGENERATE_BULLET_PROMPT,
     DRAFT_NEW_BULLET_PROMPT,
 )
@@ -141,6 +149,27 @@ def safe_call(label, fn, *args, **kwargs):
         st.error(f"{label} failed: {e}")
         st.code(traceback.format_exc())
         st.stop()
+
+
+def run_assistant_analysis(resume_text: str, jd_text: str, label: str) -> dict:
+    """Run SKILL_GAPS_PROMPT and BULLET_REWRITES_PROMPT (two separate,
+    focused LLM calls — see prompts.py's module docstring for why this
+    replaced one combined ASSISTANT_PROMPT call) and merge their results
+    into the {"skill_gaps": [...], "bullet_rewrites": [...]} shape the
+    rest of the app expects, with duplicates dropped from each list."""
+    user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
+
+    skill_gaps_result = safe_call(
+        f"{label} (skill gaps)", ask_json, SKILL_GAPS_PROMPT, user_msg
+    )
+    bullet_rewrites_result = safe_call(
+        f"{label} (bullet rewrites)", ask_json, BULLET_REWRITES_PROMPT, user_msg
+    )
+
+    return {
+        "skill_gaps": dedupe_skill_gaps(skill_gaps_result["skill_gaps"]),
+        "bullet_rewrites": dedupe_bullet_rewrites(bullet_rewrites_result["bullet_rewrites"]),
+    }
 
 
 def extract_docx_text(path: str) -> str:
@@ -308,15 +337,8 @@ if run:
         resume_text, jd_skills["required_skills"], jd_skills["preferred_skills"],
     )
 
-    user_msg = json.dumps({"resume_text": resume_text, "jd_text": jd_text})
-    st.session_state.assistant_output = safe_call(
-        "Résumé analysis", ask_json, ASSISTANT_PROMPT, user_msg, max_tokens=3000
-    )
-    st.session_state.assistant_output["bullet_rewrites"] = dedupe_bullet_rewrites(
-        st.session_state.assistant_output["bullet_rewrites"]
-    )
-    st.session_state.assistant_output["skill_gaps"] = dedupe_skill_gaps(
-        st.session_state.assistant_output["skill_gaps"]
+    st.session_state.assistant_output = run_assistant_analysis(
+        resume_text, jd_text, "Résumé analysis"
     )
 
     reset_suggestion_state()
@@ -525,15 +547,8 @@ if st.session_state.assistant_output:
                 st.session_state.jd_skills["preferred_skills"],
             )
 
-            user_msg = json.dumps({"resume_text": edited_text, "jd_text": jd_text})
-            st.session_state.assistant_output = safe_call(
-                "Résumé re-analysis", ask_json, ASSISTANT_PROMPT, user_msg, max_tokens=3000
-            )
-            st.session_state.assistant_output["bullet_rewrites"] = dedupe_bullet_rewrites(
-                st.session_state.assistant_output["bullet_rewrites"]
-            )
-            st.session_state.assistant_output["skill_gaps"] = dedupe_skill_gaps(
-                st.session_state.assistant_output["skill_gaps"]
+            st.session_state.assistant_output = run_assistant_analysis(
+                edited_text, jd_text, "Résumé re-analysis"
             )
 
             st.session_state.resume_path = out_path
