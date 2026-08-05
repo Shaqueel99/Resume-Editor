@@ -161,17 +161,25 @@ def _is_bullet_paragraph(paragraph: Paragraph) -> bool:
     return bool(text) and text[0] in "•‣▪◦-*"
 
 
-def _copy_paragraph_format(source: Paragraph, target: Paragraph) -> None:
-    """Copy list numbering (bullet/indent) from an existing bullet
-    paragraph onto a newly created one, for templates where bullets come
-    from direct list formatting rather than a named paragraph style."""
-    src_pPr = source._p.find(qn("w:pPr"))
-    if src_pPr is None:
-        return
-    src_numPr = src_pPr.find(qn("w:numPr"))
-    if src_numPr is None:
-        return
-    target._p.get_or_add_pPr().append(deepcopy(src_numPr))
+def _clone_paragraph_with_text(source: Paragraph, new_text: str) -> Paragraph:
+    """Deep-copy an existing paragraph's XML — numbering, indentation,
+    paragraph spacing, run fonts/sizes — and swap in new text, so an
+    inserted bullet is formatted identically to its siblings. Copying only
+    a handful of properties (e.g. just numPr) misses direct formatting
+    like "space before" or indentation that templates often set outright,
+    which is what produces a misaligned or oddly-spaced inserted bullet."""
+    new_p = deepcopy(source._p)
+    new_paragraph = Paragraph(new_p, source._parent)
+
+    runs = new_paragraph.runs
+    if runs:
+        runs[0].text = new_text
+        for run in runs[1:]:
+            run.text = ""
+    else:
+        new_paragraph.add_run(new_text)
+
+    return new_paragraph
 
 
 def _manual_bullet_prefix(paragraph: Paragraph) -> str:
@@ -268,8 +276,7 @@ def insert_bullets_into_entries(doc_path: str, out_path: str,
         anchor = paragraphs[anchor_index]
         for bullet_text in bullets:
             text = _manual_bullet_prefix(anchor) + bullet_text
-            new_paragraph = doc.add_paragraph(text, style=anchor.style)
-            _copy_paragraph_format(anchor, new_paragraph)
+            new_paragraph = _clone_paragraph_with_text(anchor, text)
             anchor._p.addnext(new_paragraph._p)
             anchor = new_paragraph
 
