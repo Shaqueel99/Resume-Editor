@@ -302,6 +302,178 @@ Output ONLY a valid JSON object matching the schema above. No prose. No \
 markdown fences. No commentary.\
 """
 
+# ---------------------------------------------------------------------------
+# COVER LETTER PIPELINE (analyse -> identify gaps -> generate draft)
+# ---------------------------------------------------------------------------
+# Step 1 is COVER_LETTER_ANALYSIS_PROMPT below. Step 2 reuses
+# SKILL_GAPS_PROMPT above unchanged — the cover letter needs the exact
+# same "what does the JD ask for that the résumé doesn't show" analysis
+# the fit checker already does, so there is no reason to duplicate that
+# prompt. Step 3 is COVER_LETTER_DRAFT_PROMPT, which combines both prior
+# steps' output into a labelled-section draft. COVER_LETTER_REVISE_PROMPT
+# is the follow-up-turn step, used once a draft already exists.
+
+COVER_LETTER_ANALYSIS_PROMPT = """\
+INSTRUCTION
+Analyse a candidate's résumé against a job description and identify the \
+strongest, most concrete points of alignment — specific résumé evidence \
+that genuinely matches what the JD is asking for — to ground a cover \
+letter in the candidate's real experience rather than generic claims. \
+Return them as a single JSON object matching the schema below.
+
+CONTEXT
+You will receive résumé text and JD text as JSON with keys "resume_text" \
+and "jd_text". This is the first step of a pipeline that goes on to \
+identify skill gaps and then draft a cover letter; your output is what \
+grounds the draft's body paragraphs in real, specific résumé content \
+instead of vague self-praise ("results-driven professional", "excellent \
+communication skills") that could describe any candidate.
+
+CONSTRAINTS
+- Every "resume_evidence" value must be a genuine claim already present \
+in resume_text — do not paraphrase it into something stronger than what \
+is actually there, and do not invent evidence that is not in the résumé.
+- Every "jd_requirement" value must be something the JD actually asks \
+for — quote or closely paraphrase the JD's own wording.
+- Pick the alignments a cover letter would actually want to lead with: \
+prefer specific, concrete matches (a named technology, a quantified \
+result, a directly relevant responsibility) over vague thematic overlap.
+- List at most 5 alignments, ordered strongest first. If the résumé \
+genuinely has fewer than 5 strong points of alignment with the JD, \
+return fewer rather than padding the list with weak ones.
+- If there is truly no meaningful alignment to report, return an empty \
+array — that is a correct result, not an incomplete one.
+
+OUTPUT
+Return a JSON object with exactly this schema:
+{
+  "key_alignments": [
+    {
+      "jd_requirement": string,
+      "resume_evidence": string
+    }
+  ]
+}
+
+Output ONLY a valid JSON object matching the schema above. No prose. No \
+markdown fences. No commentary.\
+"""
+
+COVER_LETTER_DRAFT_PROMPT = """\
+INSTRUCTION
+Write a tailored cover letter draft for a candidate applying to a \
+specific job, grounded in their actual résumé content and honest about \
+the gaps between their experience and the job's requirements. Return it \
+as a single JSON object with the letter broken into clearly labelled \
+sections, matching the schema below.
+
+CONTEXT
+You will receive a JSON user message with four fields: "resume_text", \
+"jd_text", "key_alignments" (specific résumé-to-JD matches from a prior \
+analysis step, each an object with "jd_requirement" and \
+"resume_evidence") and "skill_gaps" (JD requirements the résumé does not \
+evidence, each an object with "skill" and "why_it_matters", from a prior \
+gap-analysis step). Use key_alignments as the factual basis for the \
+letter's case for the candidate. Use skill_gaps to decide what, if \
+anything, the letter needs to address — a strong letter does not ignore \
+a gap the reader will obviously notice, but it also does not apologize \
+for one that is minor or beside the point.
+
+CONSTRAINTS
+- Every factual claim (a technology, project, responsibility, or result) \
+must come from resume_text or key_alignments. Never invent experience, \
+metrics, job titles, or technologies the candidate does not have.
+- For gaps worth addressing, do not fabricate matching experience. \
+Instead, bridge them honestly: connect an adjacent skill the résumé DOES \
+show, name genuine enthusiasm to learn, or simply omit minor gaps \
+entirely rather than drawing attention to a weakness. Only address a gap \
+if leaving it unaddressed would be a more obvious omission than \
+mentioning it.
+- Write in first person, professional but not stiff, as the candidate \
+addressing the hiring team. Avoid first-person pronoun overuse — vary \
+sentence openings.
+- "greeting" is a single salutation line (e.g. "Dear Hiring Manager,") — \
+use "Dear Hiring Manager," unless the JD names a specific person.
+- "opening" is 1-2 sentences: name the role being applied for and one \
+compelling, specific hook — not a generic "I am writing to apply for...".
+- "alignment_body" is 1-2 paragraphs making the case for the candidate \
+using key_alignments — specific, not a list of adjectives.
+- "gap_mitigation_body" addresses genuine gaps per the constraint above. \
+If there is nothing worth addressing, return an empty string — do not \
+manufacture a paragraph about a gap that doesn't need one.
+- "closing" is 1 short paragraph: reiterate interest and invite next \
+steps (e.g. an interview), without restating the whole letter.
+- "sign_off" is a single line (e.g. "Sincerely,\\n[Your Name]").
+- Keep the whole letter to roughly 250-400 words across all sections \
+combined.
+
+OUTPUT
+Return a JSON object with exactly this schema:
+{
+  "greeting": string,
+  "opening": string,
+  "alignment_body": string,
+  "gap_mitigation_body": string,
+  "closing": string,
+  "sign_off": string
+}
+
+Output ONLY a valid JSON object matching the schema above. No prose. No \
+markdown fences. No commentary.\
+"""
+
+COVER_LETTER_REVISE_PROMPT = """\
+INSTRUCTION
+You are given the current draft of a cover letter, broken into labelled \
+sections, the job description it is tailored to, and a piece of user \
+feedback describing how they want it changed. Produce a revised version \
+of the letter honoring that feedback, and return it as a single JSON \
+object.
+
+CONTEXT
+You will receive a JSON user message with three fields: "current_draft" \
+(an object with the same six section keys as the schema below), \
+"jd_text", and "feedback" (the user's instruction, e.g. "make the tone \
+warmer", "shorten the opening", "drop the paragraph about Python, I don't \
+want to lead with that", "the gap paragraph feels apologetic, tone it \
+down"). This is a refinement turn — the user has already seen \
+current_draft and wants changes, not a rewrite from scratch. Sections the \
+feedback doesn't concern should carry over unchanged, unless a change to \
+one section requires a small adjustment elsewhere so the letter still \
+reads coherently (e.g. shortening the opening may mean the \
+alignment_body's first sentence needs a small tweak so it doesn't repeat \
+what the opening now says).
+
+CONSTRAINTS
+- Never introduce a new factual claim (technology, project, metric, \
+outcome) that was not already present in current_draft. The feedback \
+tells you HOW to change the letter, not license to add facts. If the \
+feedback explicitly asks you to add a fact that was never in the draft, \
+do not comply — leave that claim out and explain the conflict in \
+"change_summary" instead.
+- Preserve the six-section structure and the general purpose of each \
+section (greeting / opening hook / alignment case / gap mitigation / \
+closing / sign-off), even if you shift a sentence's emphasis within a \
+section per the feedback.
+- "change_summary" states in 20 words or fewer what changed, in terms \
+the user will recognize from their own feedback.
+
+OUTPUT
+Return a JSON object with exactly this schema:
+{
+  "greeting": string,
+  "opening": string,
+  "alignment_body": string,
+  "gap_mitigation_body": string,
+  "closing": string,
+  "sign_off": string,
+  "change_summary": string
+}
+
+Output ONLY a valid JSON object matching the schema above. No prose. No \
+markdown fences. No commentary.\
+"""
+
 DRAFT_NEW_BULLET_PROMPT = """\
 INSTRUCTION
 You are given a skill gap identified between a résumé and a job \
