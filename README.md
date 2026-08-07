@@ -59,3 +59,14 @@ Tailoring a résumé and cover letter to every job posting is tedious, and it's 
 
 - Let the user pick which specific existing bullet point a suggestion should replace (or insert next to), with the new text automatically matching the surrounding formatting, instead of only auto-anchoring to text matches or appending to a detected entry.
 - Support adding an entire new résumé entry — job title, company, and dates — with its own bullet points underneath, rather than only inserting bullets into an existing entry or a generic "Additional Skills" section.
+
+## Screenshots of Resume Editor
+![alt text](image.png)
+![alt text](image-1.png)
+![alt text](image-2.png)
+
+## Screenshots of Cover Letter Generator
+![alt text](image-3.png)
+![alt text](image-4.png)
+![alt text](image-5.png)
+![alt text](image-6.png)

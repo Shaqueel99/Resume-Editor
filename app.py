@@ -19,10 +19,10 @@ import streamlit as st
 import cover_letter_page
 import fit_checker_page
 
-st.set_page_config(page_title="Résumé fit checker", layout="wide")
+st.set_page_config(page_title="Résumé editor", layout="wide")
 
 pages = [
-    st.Page(fit_checker_page.render, title="Résumé fit checker", icon="📄",
+    st.Page(fit_checker_page.render, title="Résumé editor", icon="📄",
             url_path="fit-checker", default=True),
     st.Page(cover_letter_page.render, title="Cover letter generator", icon="✉️",
             url_path="cover-letter"),

@@ -1,6 +1,6 @@
 """fit_checker_page.py
 
-Résumé fit checker — Streamlit page (moved out of app.py so app.py can
+Résumé editor — Streamlit page (moved out of app.py so app.py can
 be a thin st.navigation() entry point; see app.py's module docstring).
 
 Flow:
@@ -247,7 +247,7 @@ def render() -> None:
     if st.session_state.get("pending_scroll"):
         st.session_state.pending_scroll = False
         scroll_to_here(0, key="top")
-    st.title("Résumé fit checker")
+    st.title("Résumé editor")
     st.caption("Upload your résumé, paste a job post, see exactly what to change")
 
     # -----------------------------------------------------------------------
